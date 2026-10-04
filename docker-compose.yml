@@ -1,0 +1,18 @@
+services:
+  file-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      HOST_ROOT: ${HOST_ROOT:-/mnt/c/Users/Sushant-Chaudhary/Desktop/File}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:-}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      DASHBOARD_INTERNAL_PORT: 8080
+    volumes:
+      - ${HOST_ROOT:-/mnt/c/Users/Sushant-Chaudhary/Desktop/File}:${HOST_ROOT:-/mnt/c/Users/Sushant-Chaudhary/Desktop/File}
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-8080}:8080"
+    working_dir: /app
+    command: python app.py

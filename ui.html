@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f3f6fb">
+  <title>SFTP | Operations</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme:light; --ink:#1c2c43; --muted:#66758a; --canvas:#f3f6fb; --surface:#fff; --line:#e0e7f0; --blue:#0866ff; --blue-dark:#0758db; --blue-soft:#eaf2ff; --green:#18845b; --coral:#c44242; --gold:#a66b08; --mono:"IBM Plex Mono","SFMono-Regular","Cascadia Code",Consolas,monospace; --sans:Manrope,"Avenir Next","Segoe UI Variable","Segoe UI",sans-serif; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:linear-gradient(135deg,#f8faff 0%,var(--canvas) 54%,#edf3fb 100%); color:var(--ink); font:14px/1.5 var(--sans); }
+    button,input { color:inherit; font:inherit; } button { cursor:pointer; }
+    .shell { width:min(1320px,100% - 48px); margin:auto; }
+    header { min-height:72px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); gap:16px; background:rgba(255,255,255,.84); }
+    .brand { display:flex; align-items:center; gap:12px; font-weight:750; letter-spacing:0; }
+    .brand-mark { width:34px; height:34px; display:grid; place-items:center; border-radius:7px; background:var(--blue); color:#fff; font:700 12px var(--mono); box-shadow:0 3px 9px #0866ff30; }
+    .topline { display:flex; align-items:center; gap:9px; color:var(--muted); background:#fff; border:1px solid var(--line); border-radius:999px; padding:7px 11px; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 0 3px #18845b18; }
+    main { padding:38px 0 56px; }
+    .heading { display:flex; justify-content:space-between; align-items:end; gap:20px; margin-bottom:27px; }
+    .eyebrow { display:inline-flex; align-items:center; min-height:24px; padding:0 8px; border-radius:4px; background:var(--blue-soft); color:var(--blue); font:600 10px var(--mono); text-transform:uppercase; letter-spacing:0; }
+    h1 { margin:10px 0 0; font-size:34px; line-height:1.13; font-weight:750; letter-spacing:0; } h2 { margin:0; font-size:15px; font-weight:700; letter-spacing:0; }
+    .actions { display:flex; gap:8px; }
+    .button { min-height:40px; border:1px solid #d6dfec; padding:0 15px; background:#fff; border-radius:6px; color:var(--ink); font-weight:600; transition:background .15s,border-color .15s,transform .15s; }
+    .button:hover { border-color:#a9c5f8; background:#f5f8ff; } .button.primary { background:var(--blue); color:#fff; border-color:var(--blue); font-weight:650; box-shadow:0 3px 8px #0866ff25; }
+    .button.primary:hover { background:var(--blue-dark); transform:translateY(-1px); } .button:disabled { opacity:.55; cursor:wait; }
+    button:focus-visible,input:focus-visible { outline:3px solid #86b7ff; outline-offset:2px; }
+    .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:34px; }
+    .metric { padding:14px 17px 15px; min-height:82px; background:var(--surface); border:1px solid var(--line); border-radius:7px; box-shadow:0 3px 10px #243b5a08; }
+    .metric+.metric { padding-left:17px; border:1px solid var(--line); }
+    .metric-label { color:var(--muted); font-size:10px; font-weight:600; font-family:var(--mono); text-transform:uppercase; letter-spacing:0; } .metric-value { margin-top:7px; font:21px var(--mono); font-variant-numeric:tabular-nums; color:#182d4a; }
+    .layout { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr); gap:24px; align-items:start; }
+    .layout > section { min-width:0; padding:0 16px 14px; background:var(--surface); border:1px solid var(--line); border-radius:8px; box-shadow:0 5px 18px #243b5a0a; }
+    .section-head { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:16px 0 13px; border-bottom:1px solid var(--line); margin-bottom:0; }
+    .section-meta { color:var(--muted); font:11px var(--mono); margin-top:3px; }
+    .search { width:min(190px,45%); background:#fff; border:1px solid #d6dfec; border-radius:5px; padding:8px 10px; color:var(--ink); font:12px var(--sans); }
+    .search:focus { border-color:#86b7ff; }
+    .table-wrap { overflow-x:auto; background:#fff; } table { width:100%; border-collapse:collapse; text-align:left; min-width:610px; }
+    th { color:#61738b; background:#f6f8fc; font:500 10px var(--mono); text-transform:uppercase; letter-spacing:0; padding:12px 10px; }
+    td { padding:13px 10px; border-top:1px solid #edf1f6; vertical-align:top; }
+    tbody tr:hover td { background:#f6f9ff; }
+    .client { font-weight:700; white-space:nowrap; color:#183354; } .path { color:#52647a; font:11px/1.6 var(--mono); overflow-wrap:anywhere; }
+    .pill { display:inline-flex; align-items:center; gap:6px; color:var(--green); font:500 10px var(--mono); background:#e8f6ef; padding:4px 7px; border-radius:999px; }
+    .pill:before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; } .pill.off { color:#6c7788; background:#eef1f5; }
+    .logbox { height:390px; overflow:auto; background:#f8faff; border-radius:5px; padding:8px 0; font:11px/1.7 var(--mono); }
+    .logline { display:grid; grid-template-columns:72px 1fr; gap:10px; padding:6px 12px; border-bottom:1px solid #edf1f6; overflow-wrap:anywhere; }
+    .logtime { color:#8794a5; } .logline.warn .logmessage { color:var(--gold); } .logline.error .logmessage { color:var(--coral); }
+    .empty { padding:22px 12px; color:var(--muted); } .notice { min-height:20px; margin-top:10px; color:var(--muted); font-size:12px; } .notice.error { color:var(--coral); }
+    @media(max-width:900px) { .layout { grid-template-columns:1fr; } .logbox { height:300px; } }
+    @media(max-width:620px) { .shell { width:min(100% - 28px,1320px); } header { min-height:62px; } main { padding-top:26px; } .heading { align-items:flex-start; flex-direction:column; } h1 { font-size:28px; } .actions { width:100%; } .actions .button { flex:1; } .metrics { grid-template-columns:repeat(2,1fr); gap:8px; margin-bottom:26px; } .metric { padding:11px 12px; min-height:72px; } .metric+.metric { padding-left:12px; } .layout { gap:20px; } .layout > section { padding:0 12px 12px; } .section-head { align-items:flex-start; flex-wrap:wrap; } .section-head > div { width:100%; } .search { width:100%; max-width:none; } }
+    @media(prefers-reduced-motion:no-preference) { main { animation:arrive .35s ease-out both; } @keyframes arrive { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header><div class="brand"><span class="brand-mark" aria-hidden="true">ST</span> SFTP</div><div class="topline"><span class="dot" id="worker-dot"></span><span id="worker-label">Connecting</span></div></header>
+    <main>
+      <div class="heading"><div><div class="eyebrow">Operations / Manual</div><h1>Transfer activity</h1></div><div class="actions"><button class="button primary" id="run-button" type="button">Start SFTP transfer</button></div></div>
+      <section class="metrics" aria-label="Worker status">
+        <div class="metric"><div class="metric-label">Worker</div><div class="metric-value" id="metric-worker">Loading</div></div>
+        <div class="metric"><div class="metric-label">Active routes</div><div class="metric-value" id="metric-routes">—</div></div>
+        <div class="metric"><div class="metric-label">Run mode</div><div class="metric-value">Manual</div></div>
+        <div class="metric"><div class="metric-label">Last completed</div><div class="metric-value" id="metric-last" style="font-size:13px;padding-top:5px">Never</div></div>
+      </section>
+      <div class="layout">
+        <section aria-labelledby="routes-title"><div class="section-head"><div><h2 id="routes-title">Database routes</h2><div class="section-meta" id="route-count">Loading routes</div></div><input class="search" id="route-search" type="search" placeholder="Filter routes" aria-label="Filter routes"></div>
+          <div class="table-wrap"><table><thead><tr><th>Client</th><th>Source</th><th>Destination</th><th>State</th></tr></thead><tbody id="routes-body"><tr><td class="empty" colspan="4">Loading route table…</td></tr></tbody></table></div><div class="notice" id="route-notice" role="status"></div>
+        </section>
+        <section><div class="section-head"><div><h2>Worker log</h2><div class="section-meta">Most recent 500 events</div></div><button class="button" type="button" id="clear-view">Clear view</button></div><div class="logbox" id="logbox" role="log" aria-live="polite"><div class="empty">Waiting for worker events…</div></div><div class="notice" id="notice" role="status"></div></section>
+      </div>
+    </main>
+  </div>
+  <script>
+    const $ = (selector) => document.querySelector(selector);
+    let lastLogId = 0, allRoutes = [];
+    const logBox = $("#logbox");
+    const formatTime = (value) => value ? new Date(value).toLocaleString() : "Never";
+    async function api(url, options = {}) {
+      const response = await fetch(url, { ...options, headers: { "Content-Type":"application/json", ...options.headers } });
+      if (!response.ok) { const result=await response.json().catch(()=>({})); throw new Error(result.error || `Request failed (${response.status})`); }
+      return response.json();
+    }
+    function renderRoutes() {
+      const filter=$("#route-search").value.trim().toLowerCase();
+      const routes=allRoutes.filter((route)=>Object.values(route).join(" ").toLowerCase().includes(filter));
+      $("#route-count").textContent=`${routes.length} shown / ${allRoutes.length} total`;
+      $("#metric-routes").textContent=allRoutes.filter((route)=>route.enabled).length;
+      const body=$("#routes-body"); body.replaceChildren();
+      if (!routes.length) { const row=document.createElement("tr"),cell=document.createElement("td"); cell.className="empty"; cell.colSpan=4; cell.textContent="No matching routes"; row.append(cell); body.append(row); return; }
+      for (const route of routes) {
+        const row=document.createElement("tr");
+        for (const [value,className] of [[route.client_id,"client"],[route.source,"path"],[route.destination,"path"]]) { const cell=document.createElement("td"); cell.className=className; cell.textContent=value ?? ""; row.append(cell); }
+        const cell=document.createElement("td"),pill=document.createElement("span"); pill.className=`pill${route.enabled ? "" : " off"}`; pill.textContent=route.enabled ? "Enabled" : "Disabled"; cell.append(pill); row.append(cell); body.append(row);
+      }
+    }
+    async function refreshRoutes() { try { allRoutes=await api("/api/routes"); $("#route-notice").textContent=""; renderRoutes(); } catch(error) { $("#route-notice").textContent=error.message; $("#route-notice").className="notice error"; } }
+    async function refreshStatus() {
+      try {
+        const state=await api("/api/status"),label=state.running ? "SFTP transfer running" : state.run_pending ? "SFTP transfer starting" : "Ready for manual transfer";
+        $("#worker-label").textContent=label; $("#worker-dot").style.background=state.last_error ? "var(--coral)" : state.running ? "var(--gold)" : "var(--green)";
+        $("#metric-worker").textContent=state.running ? "Running" : "Ready"; $("#metric-last").textContent=formatTime(state.last_finished);
+        $("#run-button").disabled=state.running || state.run_pending; $("#notice").textContent=state.last_error ? `Last worker error: ${state.last_error}` : ""; $("#notice").className=state.last_error ? "notice error" : "notice";
+      } catch(error) { $("#worker-label").textContent="Connection error"; $("#metric-worker").textContent="Offline"; $("#notice").textContent=error.message; $("#notice").className="notice error"; }
+    }
+    async function refreshLogs() {
+      try {
+        const entries=await api(`/api/logs?after=${lastLogId}`); if (!entries.length) return;
+        if (logBox.querySelector(".empty")) logBox.replaceChildren();
+        for (const entry of entries) { const line=document.createElement("div"),time=document.createElement("span"),message=document.createElement("span"); line.className=`logline ${entry.level}`; time.className="logtime"; time.textContent=new Date(entry.timestamp).toLocaleTimeString(); message.className="logmessage"; message.textContent=entry.message; line.append(time,message); logBox.append(line); lastLogId=entry.id; }
+        while (logBox.children.length>500) logBox.firstElementChild.remove(); logBox.scrollTop=logBox.scrollHeight;
+      } catch(error) { $("#notice").textContent=error.message; $("#notice").className="notice error"; }
+    }
+    $("#route-search").addEventListener("input",renderRoutes);
+    $("#run-button").addEventListener("click",async()=>{ try { await api("/api/run",{method:"POST",body:"{}"}); $("#notice").textContent="SFTP transfer started"; } catch(error) { $("#notice").textContent=error.message; $("#notice").className="notice error"; } refreshStatus(); refreshLogs(); });
+    $("#clear-view").addEventListener("click",()=>{ logBox.replaceChildren(); const empty=document.createElement("div"); empty.className="empty"; empty.textContent="View cleared. New events will appear here."; logBox.append(empty); });
+    refreshRoutes(); refreshStatus(); refreshLogs(); setInterval(()=>{refreshStatus();refreshLogs();},3000); setInterval(refreshRoutes,15000);
+  </script>
+</body>
+</html>
