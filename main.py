@@ -109,6 +109,7 @@ def copy_files(client_id=None):
                 print(f"Destination is not a directory: {destination}")
                 continue
 
+            copied_count = 0
             for file in source.iterdir():
                 if not file.is_file():
                     continue
@@ -124,9 +125,13 @@ def copy_files(client_id=None):
                 try:
                     shutil.copy2(file, target)
                     print(f"COPIED: {file} -> {target}")
+                    copied_count += 1
 
                 except Exception as e:
                     print(f"ERROR: {file} - {e}")
+
+            if copied_count == 0:
+                print(f"No new file is present to copy from {source}")
 
 
 if __name__ == "__main__":
