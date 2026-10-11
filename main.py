@@ -1,8 +1,8 @@
-```python
 import os
 import re
 import shutil
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import psycopg2
@@ -113,20 +113,29 @@ def copy_files(client_id=None):
                     )
                     continue
 
+                cutoff = datetime.now().timestamp() - timedelta(days=10).total_seconds()
+                recent_files = sorted(
+                    (
+                        file
+                        for file in source.iterdir()
+                        if file.is_file()
+                        and re.match(filename_regex, file.name)
+                        and file.stat().st_mtime >= cutoff
+                    ),
+                    key=lambda file: file.stat().st_mtime,
+                    reverse=True,
+                )
                 copied_count = 0
 
-                for file in source.iterdir():
-                    if not file.is_file():
-                        continue
-
-                    if not re.match(filename_regex, file.name):
-                        continue
-
+                for file in recent_files:
                     target = destination / file.name
 
                     if target.exists():
-                        print(f"File already exists: {target}", flush=True)
-                        continue
+                        print(
+                            f"Already in destination; stopping before older files: {target}",
+                            flush=True,
+                        )
+                        break
 
                     try:
                         shutil.copy2(file, target)
@@ -139,9 +148,14 @@ def copy_files(client_id=None):
                             flush=True,
                         )
 
-                if copied_count == 0:
+                if not recent_files:
                     print(
-                        f"No new file was copied from {source}",
+                        f"No matching files from the last 10 days in {source}",
+                        flush=True,
+                    )
+                elif copied_count == 0:
+                    print(
+                        f"No new files to copy from {source}",
                         flush=True,
                     )
 
@@ -163,4 +177,3 @@ if __name__ == "__main__":
             print(f"Processing client_id: {client_id}")
             copy_files(client_id)
         time.sleep(poll_interval)
-```
