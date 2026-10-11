@@ -1,3 +1,4 @@
+```python
 import os
 import re
 import shutil
@@ -94,44 +95,62 @@ def copy_files(client_id=None):
             source = Path(source_path)
             destination = Path(destination_path)
 
-            print(f"Checking source: {source}")
-            print(f"Checking destination: {destination}")
+            print(f"Checking source: {source!r}", flush=True)
+            print(f"Checking destination: {destination!r}", flush=True)
 
-            if not source.exists():
-                print(f"Source not found: {source}")
-                continue
-
-            if not destination.exists():
-                print(f"Destination not found: {destination}")
-                continue
-
-            if not destination.is_dir():
-                print(f"Destination is not a directory: {destination}")
-                continue
-
-            copied_count = 0
-            for file in source.iterdir():
-                if not file.is_file():
+            try:
+                if not source.is_dir():
+                    print(
+                        f"Source directory unavailable: {source!r}",
+                        flush=True,
+                    )
                     continue
 
-                if not re.match(filename_regex, file.name):
+                if not destination.is_dir():
+                    print(
+                        f"Destination directory unavailable: {destination!r}",
+                        flush=True,
+                    )
                     continue
 
-                target = destination / file.name
-                if target.exists():
-                    print(f"File already exists: {target}")
-                    continue
+                copied_count = 0
 
-                try:
-                    shutil.copy2(file, target)
-                    print(f"COPIED: {file} -> {target}")
-                    copied_count += 1
+                for file in source.iterdir():
+                    if not file.is_file():
+                        continue
 
-                except Exception as e:
-                    print(f"ERROR: {file} - {e}")
+                    if not re.match(filename_regex, file.name):
+                        continue
 
-            if copied_count == 0:
-                print(f"No new file is present to copy from {source}")
+                    target = destination / file.name
+
+                    if target.exists():
+                        print(f"File already exists: {target}", flush=True)
+                        continue
+
+                    try:
+                        shutil.copy2(file, target)
+                        print(f"COPIED: {file} -> {target}", flush=True)
+                        copied_count += 1
+
+                    except OSError as e:
+                        print(
+                            f"ERROR copying {file} -> {target}: {e}",
+                            flush=True,
+                        )
+
+                if copied_count == 0:
+                    print(
+                        f"No new file was copied from {source}",
+                        flush=True,
+                    )
+
+            except OSError as e:
+                print(
+                    f"Filesystem error for client "
+                    f"{current_client_id}: {e}",
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":
@@ -144,3 +163,4 @@ if __name__ == "__main__":
             print(f"Processing client_id: {client_id}")
             copy_files(client_id)
         time.sleep(poll_interval)
+```
