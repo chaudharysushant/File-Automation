@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 import psycopg2
 from psycopg2 import sql
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -566,7 +566,7 @@ def logout():
 
 @app.get("/")
 def index():
-    return send_file(Path(__file__).with_name("ui.html"), mimetype="text/html")
+    return render_template("dashboard.html", csrf_token=get_csrf_token())
 
 
 @app.get("/api/status")
