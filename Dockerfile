@@ -11,5 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py ./
 COPY app.py ./
 COPY ui.html ./
+COPY templates/ ./templates/
 
 CMD ["python", "app.py"]

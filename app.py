@@ -1,19 +1,29 @@
 import os
+import secrets
 import sys
 import threading
 from collections import deque
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request, send_file
+from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
 import psycopg2
 from psycopg2 import sql
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import main
 
 
 app = Flask(__name__)
+app.secret_key = os.getenv("DASHBOARD_SECRET_KEY") or secrets.token_urlsafe(32)
+app.config.update(
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.getenv("DASHBOARD_COOKIE_SECURE", "false").lower()
+    in {"1", "true", "yes"},
+)
 _state_lock = threading.Lock()
 _run_lock = threading.Lock()
 _logs = deque(maxlen=500)
@@ -45,6 +55,43 @@ def get_routes():
                  "filename_regex": row[3], "enabled": row[4]}
                 for row in cursor.fetchall()
             ]
+    finally:
+        conn.close()
+
+
+def get_dashboard_account():
+    schema = os.getenv("PG_SCHEMA", "public")
+    conn = psycopg2.connect(**main.get_db_config())
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql.SQL("""
+                    SELECT username, password_hash
+                    FROM {}.dashboard_account
+                    WHERE account_id = 1
+                """).format(sql.Identifier(schema))
+            )
+            return cursor.fetchone()
+    finally:
+        conn.close()
+
+
+def create_dashboard_account(username, password_hash):
+    schema = os.getenv("PG_SCHEMA", "public")
+    conn = psycopg2.connect(**main.get_db_config())
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("""
+                        INSERT INTO {}.dashboard_account (account_id, username, password_hash)
+                        VALUES (1, %s, %s)
+                        ON CONFLICT (account_id) DO NOTHING
+                        RETURNING account_id
+                    """).format(sql.Identifier(schema)),
+                    (username, password_hash),
+                )
+                return cursor.fetchone() is not None
     finally:
         conn.close()
 
@@ -114,23 +161,148 @@ def run_cycle():
         _run_lock.release()
 
 
-def require_auth():
-    username = os.getenv("DASHBOARD_USERNAME", "")
-    password = os.getenv("DASHBOARD_PASSWORD", "")
-    if not username or not password:
-        return Response("Dashboard credentials are not configured.\n", status=503)
-    credentials = request.authorization
-    if credentials is None or credentials.username != username or credentials.password != password:
-        return Response(
-            "Authentication required\n", status=401,
-            headers={"WWW-Authenticate": 'Basic realm="SFTP Dashboard"'},
-        )
-    return None
+def get_csrf_token():
+    return session.setdefault("csrf_token", secrets.token_urlsafe(32))
+
+
+def valid_csrf_token():
+    expected = session.get("csrf_token", "")
+    supplied = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token", "")
+    return bool(expected and supplied and secrets.compare_digest(expected, supplied))
 
 
 @app.before_request
 def protect_dashboard():
-    return require_auth()
+    if request.endpoint in {"login", "register"}:
+        return None
+    if not session.get("authenticated"):
+        try:
+            account = get_dashboard_account()
+        except Exception:
+            app.logger.exception("Dashboard account storage is unavailable")
+            message = "Dashboard account storage is unavailable. Apply create_dashboard_account.sql."
+            if request.path.startswith("/api/"):
+                return jsonify({"error": message}), 503
+            return message, 503
+        if account is None:
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Dashboard registration is required"}), 401
+            return redirect(url_for("register"))
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Authentication required"}), 401
+        return redirect(url_for("login"))
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not valid_csrf_token():
+        return jsonify({"error": "Invalid or missing CSRF token"}), 403
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("authenticated"):
+        return redirect(url_for("index"))
+
+    error = None
+    status = 200
+    token = get_csrf_token()
+    try:
+        account = get_dashboard_account()
+    except Exception:
+        app.logger.exception("Dashboard account storage is unavailable")
+        return "Dashboard account storage is unavailable. Apply create_dashboard_account.sql.", 503
+    if account is None:
+        return redirect(url_for("register"))
+
+    if request.method == "POST":
+        if not valid_csrf_token():
+            error = "Your sign-in form expired. Please try again."
+            status = 400
+        else:
+            username = request.form.get("username", "")
+            password = request.form.get("password", "")
+            stored_username, password_hash = account
+            valid_username = secrets.compare_digest(username, stored_username)
+            valid_password = check_password_hash(password_hash, password)
+            if valid_username and valid_password:
+                session.clear()
+                session["authenticated"] = True
+                session["csrf_token"] = secrets.token_urlsafe(32)
+                session.permanent = True
+                return redirect(url_for("index"))
+            error = "Username or password is incorrect."
+            status = 401
+
+    return render_template(
+        "login.html",
+        csrf_token=token,
+        error=error,
+        registered=request.args.get("registered") == "1",
+    ), status
+
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if session.get("authenticated"):
+        return redirect(url_for("index"))
+
+    try:
+        if get_dashboard_account() is not None:
+            return redirect(url_for("login"))
+    except Exception:
+        app.logger.exception("Dashboard account storage is unavailable")
+        return "Dashboard account storage is unavailable. Apply create_dashboard_account.sql.", 503
+
+    error = None
+    status = 200
+    token = get_csrf_token()
+    if request.method == "POST":
+        if not valid_csrf_token():
+            error = "Your registration form expired. Please try again."
+            status = 400
+        else:
+            username = request.form.get("username", "").strip()
+            password = request.form.get("password", "")
+            confirmation = request.form.get("confirmation", "")
+            if len(username) < 3 or len(username) > 64:
+                error = "Username must be between 3 and 64 characters."
+                status = 400
+            elif len(password) < 12 or len(password) > 128:
+                error = "Password must be between 12 and 128 characters."
+                status = 400
+            elif password != confirmation:
+                error = "The passwords do not match."
+                status = 400
+            else:
+                try:
+                    created = create_dashboard_account(
+                        username,
+                        generate_password_hash(password),
+                    )
+                except Exception:
+                    app.logger.exception("Dashboard account registration failed")
+                    error = "Unable to create the account. Check the database and try again."
+                    status = 503
+                else:
+                    if created:
+                        return redirect(url_for("login", registered="1"))
+                    return redirect(url_for("login"))
+
+    return render_template(
+        "login.html",
+        csrf_token=token,
+        error=error,
+        register_mode=True,
+        registered=False,
+    ), status
+
+
+@app.get("/api/csrf")
+def csrf():
+    return jsonify({"csrf_token": get_csrf_token()})
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 @app.get("/")
@@ -181,8 +353,6 @@ def run_now():
 
 
 if __name__ == "__main__":
-    if not os.getenv("DASHBOARD_USERNAME") or not os.getenv("DASHBOARD_PASSWORD"):
-        raise RuntimeError("Set DASHBOARD_USERNAME and DASHBOARD_PASSWORD before starting the dashboard")
     from waitress import serve
 
     serve(

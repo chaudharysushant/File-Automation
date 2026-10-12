@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{% if register_mode %}Register{% else %}Sign in{% endif %} | SFTP Operations</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root { color-scheme:light; --ink:#1c2c43; --muted:#66758a; --line:#dfe7f1; --blue:#0866ff; --blue-dark:#0758db; --red:#b63b3b; --mono:"IBM Plex Mono","SFMono-Regular",Consolas,monospace; --sans:Manrope,"Avenir Next","Segoe UI",sans-serif; }
+    * { box-sizing:border-box; }
+    body { min-height:100vh; margin:0; display:grid; place-items:center; padding:24px; color:var(--ink); font:14px/1.5 var(--sans); background-color:#f1f5fa; background-image:linear-gradient(#dce5f033 1px,transparent 1px),linear-gradient(90deg,#dce5f033 1px,transparent 1px); background-size:28px 28px; }
+    .panel { width:min(100%,390px); padding:30px; background:#fff; border:1px solid var(--line); border-radius:7px; box-shadow:0 14px 36px #1c2c4312; animation:arrive .3s ease-out both; }
+    .brand { display:flex; align-items:center; gap:10px; margin-bottom:32px; font-weight:750; }
+    .mark { width:34px; height:34px; display:grid; place-items:center; border-radius:6px; color:white; background:var(--blue); font:600 11px var(--mono); }
+    .eyebrow { color:var(--blue); font:600 10px var(--mono); text-transform:uppercase; }
+    h1 { margin:7px 0 22px; font-size:25px; line-height:1.2; }
+    label { display:block; margin:15px 0 6px; color:#40536c; font-size:12px; font-weight:650; }
+    input { width:100%; height:42px; padding:0 11px; border:1px solid #cfd9e6; border-radius:5px; background:#fff; color:var(--ink); font:14px var(--sans); }
+    input:focus { outline:3px solid #86b7ff66; border-color:#6aa0f8; }
+    button { width:100%; height:42px; margin-top:22px; border:0; border-radius:5px; color:#fff; background:var(--blue); font:650 13px var(--sans); cursor:pointer; }
+    button:hover { background:var(--blue-dark); }
+    .error { margin-top:15px; color:var(--red); font-size:12px; }
+    .success { margin:0 0 16px; color:#18845b; font-size:12px; }
+    @keyframes arrive { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
+    @media(prefers-reduced-motion:reduce) { .panel { animation:none; } }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <div class="brand"><span class="mark" aria-hidden="true">ST</span><span>SFTP Operations</span></div>
+    <div class="eyebrow">Dashboard access</div>
+    <h1>{% if register_mode %}Create account{% else %}Sign in{% endif %}</h1>
+    {% if registered %}<p class="success" role="status">Account created. Sign in to continue.</p>{% endif %}
+    <form method="post" action="{% if register_mode %}/register{% else %}/login{% endif %}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username" minlength="3" maxlength="64" required autofocus>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="{% if register_mode %}new-password{% else %}current-password{% endif %}" {% if register_mode %}minlength="12" maxlength="128"{% endif %} required>
+      {% if register_mode %}<label for="confirmation">Confirm password</label><input id="confirmation" name="confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>{% endif %}
+      <button type="submit">{% if register_mode %}Create account{% else %}Sign in{% endif %}</button>
+      {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    </form>
+  </main>
+</body>
+</html>
