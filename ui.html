@@ -45,6 +45,8 @@
     td { padding:13px 10px; border-top:1px solid #edf1f6; vertical-align:top; }
     tbody tr:hover td { background:#f6f9ff; }
     .client { font-weight:700; white-space:nowrap; color:#183354; } .path { color:#52647a; font:11px/1.6 var(--mono); overflow-wrap:anywhere; }
+    .client-link { padding:0; border:0; background:transparent; color:var(--blue); font:700 12px var(--sans); text-decoration:underline; text-underline-offset:3px; }
+    .client-link:hover { color:var(--blue-dark); }
     .pill { display:inline-flex; align-items:center; gap:6px; color:var(--green); font:500 10px var(--mono); background:#e8f6ef; padding:4px 7px; border-radius:999px; }
     .pill:before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; } .pill.off { color:#6c7788; background:#eef1f5; }
     .logbox { height:390px; overflow:auto; background:#f8faff; border-radius:5px; padding:8px 0; font:11px/1.7 var(--mono); }
@@ -54,6 +56,11 @@
     .client-log-title { margin:0 0 8px; color:#183354; font:600 12px var(--mono); }
     .client-log .logbox { height:245px; }
     .logline { display:grid; grid-template-columns:72px 1fr; gap:10px; padding:6px 12px; border-bottom:1px solid #edf1f6; overflow-wrap:anywhere; }
+    dialog { width:min(820px,calc(100% - 28px)); max-width:none; max-height:85vh; padding:0 18px 18px; border:1px solid var(--line); border-radius:8px; color:var(--ink); box-shadow:0 18px 60px #10233d40; }
+    dialog::backdrop { background:#14233a80; }
+    .dialog-head { position:sticky; top:0; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 0 12px; background:#fff; border-bottom:1px solid var(--line); }
+    .dialog-head h2 { overflow-wrap:anywhere; }
+    .dialog-logbox { max-height:calc(85vh - 100px); margin-top:14px; }
     .logtime { color:#8794a5; } .logline.warn .logmessage { color:var(--gold); } .logline.error .logmessage { color:var(--coral); }
     .empty { padding:22px 12px; color:var(--muted); } .notice { min-height:20px; margin-top:10px; color:var(--muted); font-size:12px; } .notice.error { color:var(--coral); }
     @media(max-width:900px) { .layout { grid-template-columns:1fr; } .logbox { height:300px; } }
@@ -80,6 +87,7 @@
       </div>
     </main>
   </div>
+  <dialog id="client-log-dialog" aria-labelledby="client-log-title"><div class="dialog-head"><h2 id="client-log-title">Client log</h2><button class="button" id="close-client-log" type="button">Close</button></div><div class="logbox dialog-logbox" id="client-log-detail" role="log" aria-live="polite"></div></dialog>
   <script>
     const $ = (selector) => document.querySelector(selector);
     let lastLogId = 0, allRoutes = [], csrfToken = "";
@@ -101,7 +109,8 @@
       if (!routes.length) { const row=document.createElement("tr"),cell=document.createElement("td"); cell.className="empty"; cell.colSpan=4; cell.textContent="No matching routes"; row.append(cell); body.append(row); return; }
       for (const route of routes) {
         const row=document.createElement("tr");
-        for (const [value,className] of [[route.client_id,"client"],[route.source,"path"],[route.destination,"path"]]) { const cell=document.createElement("td"); cell.className=className; cell.textContent=value ?? ""; row.append(cell); }
+        const clientCell=document.createElement("td"),clientButton=document.createElement("button"); clientCell.className="client"; clientButton.className="client-link"; clientButton.type="button"; clientButton.dataset.clientId=route.client_id; clientButton.textContent=route.client_id ?? ""; clientButton.setAttribute("aria-label",`Open full log for client ${route.client_id}`); clientCell.append(clientButton); row.append(clientCell);
+        for (const [value,className] of [[route.source,"path"],[route.destination,"path"]]) { const cell=document.createElement("td"); cell.className=className; cell.textContent=value ?? ""; row.append(cell); }
         const cell=document.createElement("td"),pill=document.createElement("span"); pill.className=`pill${route.enabled ? "" : " off"}`; pill.textContent=route.enabled ? "Enabled" : "Disabled"; cell.append(pill); row.append(cell); body.append(row);
       }
     }
@@ -144,6 +153,26 @@
         }
       } catch(error) { $("#notice").textContent=error.message; $("#notice").className="notice error"; }
     }
+    function appendLogEntry(box, entry) {
+      const line=document.createElement("div"),time=document.createElement("span"),message=document.createElement("span");
+      line.className=`logline ${entry.level}`; time.className="logtime"; time.textContent=new Date(entry.timestamp).toLocaleString(); message.className="logmessage"; message.textContent=entry.message; line.append(time,message); box.append(line);
+    }
+    async function openClientLog(clientId) {
+      const dialog=$("#client-log-dialog"),box=$("#client-log-detail");
+      $("#client-log-title").textContent=`Client ${clientId} log`;
+      box.replaceChildren(); const loading=document.createElement("div"); loading.className="empty"; loading.textContent="Loading client log…"; box.append(loading);
+      dialog.showModal();
+      try {
+        const entries=await api(`/api/logs?client_id=${encodeURIComponent(clientId)}`);
+        box.replaceChildren();
+        if (!entries.length) { const empty=document.createElement("div"); empty.className="empty"; empty.textContent="No log entries for this client yet."; box.append(empty); return; }
+        for (const entry of entries) appendLogEntry(box,entry);
+        box.scrollTop=box.scrollHeight;
+      } catch(error) { box.replaceChildren(); const failure=document.createElement("div"); failure.className="empty"; failure.textContent=error.message; box.append(failure); }
+    }
+    $("#routes-body").addEventListener("click",event=>{ const button=event.target.closest(".client-link"); if (button) openClientLog(button.dataset.clientId); });
+    $("#close-client-log").addEventListener("click",()=>$("#client-log-dialog").close());
+    $("#client-log-dialog").addEventListener("click",event=>{ if (event.target === $("#client-log-dialog")) $("#client-log-dialog").close(); });
     $("#route-search").addEventListener("input",renderRoutes);
     $("#run-button").addEventListener("click",async()=>{ try { await api("/api/run",{method:"POST",body:"{}"}); $("#notice").textContent="SFTP transfer started"; } catch(error) { $("#notice").textContent=error.message; $("#notice").className="notice error"; } refreshStatus(); refreshLogs(); });
     $("#clear-view").addEventListener("click",()=>{ for (const box of clientLogBoxes.values()) { box.replaceChildren(); const empty=document.createElement("div"); empty.className="empty"; empty.textContent="View cleared. New events will appear here."; box.append(empty); } });

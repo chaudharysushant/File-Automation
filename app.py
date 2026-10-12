@@ -20,7 +20,33 @@ import main
 
 
 app = Flask(__name__)
-app.secret_key = os.getenv("DASHBOARD_SECRET_KEY") or secrets.token_urlsafe(32)
+
+
+def get_dashboard_secret_key():
+    configured = (os.getenv("DASHBOARD_SECRET_KEY") or "").strip()
+    if configured:
+        return configured
+
+    secret_file = os.getenv("DASHBOARD_SECRET_KEY_FILE")
+    if not secret_file:
+        secret_file = str(Path(__file__).resolve().with_name(".dashboard_secret_key"))
+    path = Path(secret_file)
+    if path.exists():
+        stored = path.read_text(encoding="utf-8").strip()
+        if stored:
+            return stored
+
+    generated = secrets.token_urlsafe(32)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(generated, encoding="utf-8")
+        os.chmod(path, 0o600)
+    except OSError:
+        return generated
+    return generated
+
+
+app.secret_key = get_dashboard_secret_key()
 app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
     SESSION_COOKIE_HTTPONLY=True,
@@ -565,8 +591,13 @@ def log_list():
         after_id = int(request.args.get("after", "0"))
     except ValueError:
         return jsonify({"error": "after must be an integer"}), 400
+    client_id = request.args.get("client_id")
     with _state_lock:
-        return jsonify([entry for entry in _logs if entry["id"] > after_id])
+        return jsonify([
+            entry for entry in _logs
+            if entry["id"] > after_id
+            and (client_id is None or str(entry.get("client_id")) == client_id)
+        ])
 
 
 @app.post("/api/run")

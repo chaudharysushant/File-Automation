@@ -82,6 +82,22 @@ def get_route(client_id):
     return routes
 
 
+def describe_size_change(current_size, previous_size):
+    if previous_size == 0:
+        if current_size == 0:
+            return "0.00% (same size; previous file was empty)"
+        return "not comparable (previous file was empty)"
+
+    change_percent = ((current_size - previous_size) / previous_size) * 100
+    if change_percent > 0:
+        description = "bigger"
+    elif change_percent < 0:
+        description = "smaller"
+    else:
+        description = "same size"
+    return f"{change_percent:+.2f}% ({description})"
+
+
 def copy_files(client_id=None):
     if client_id is None:
         client_ids = get_client_ids()
@@ -127,7 +143,7 @@ def copy_files(client_id=None):
                 )
                 copied_count = 0
 
-                for file in recent_files:
+                for index, file in enumerate(recent_files):
                     target = destination / file.name
 
                     if target.exists():
@@ -140,6 +156,23 @@ def copy_files(client_id=None):
                     try:
                         shutil.copy2(file, target)
                         print(f"COPIED: {file} -> {target}", flush=True)
+                        if index + 1 < len(recent_files):
+                            previous_file = recent_files[index + 1]
+                            change = describe_size_change(
+                                file.stat().st_size,
+                                previous_file.stat().st_size,
+                            )
+                            print(
+                                f"SIZE CHANGE: {file.name} vs previous file "
+                                f"{previous_file.name}: {change}",
+                                flush=True,
+                            )
+                        else:
+                            print(
+                                f"SIZE CHANGE: no older matching file available "
+                                f"for {file.name}",
+                                flush=True,
+                            )
                         copied_count += 1
 
                     except OSError as e:
