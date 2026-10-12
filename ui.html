@@ -48,6 +48,11 @@
     .pill { display:inline-flex; align-items:center; gap:6px; color:var(--green); font:500 10px var(--mono); background:#e8f6ef; padding:4px 7px; border-radius:999px; }
     .pill:before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; } .pill.off { color:#6c7788; background:#eef1f5; }
     .logbox { height:390px; overflow:auto; background:#f8faff; border-radius:5px; padding:8px 0; font:11px/1.7 var(--mono); }
+    .client-logs { display:grid; gap:16px; padding-top:14px; }
+    .client-log { min-width:0; padding-top:14px; border-top:1px solid var(--line); }
+    .client-log:first-child { padding-top:0; border-top:0; }
+    .client-log-title { margin:0 0 8px; color:#183354; font:600 12px var(--mono); }
+    .client-log .logbox { height:245px; }
     .logline { display:grid; grid-template-columns:72px 1fr; gap:10px; padding:6px 12px; border-bottom:1px solid #edf1f6; overflow-wrap:anywhere; }
     .logtime { color:#8794a5; } .logline.warn .logmessage { color:var(--gold); } .logline.error .logmessage { color:var(--coral); }
     .empty { padding:22px 12px; color:var(--muted); } .notice { min-height:20px; margin-top:10px; color:var(--muted); font-size:12px; } .notice.error { color:var(--coral); }
@@ -71,14 +76,14 @@
         <section aria-labelledby="routes-title"><div class="section-head"><div><h2 id="routes-title">Database routes</h2><div class="section-meta" id="route-count">Loading routes</div></div><input class="search" id="route-search" type="search" placeholder="Filter routes" aria-label="Filter routes"></div>
           <div class="table-wrap"><table><thead><tr><th>Client</th><th>Source</th><th>Destination</th><th>State</th></tr></thead><tbody id="routes-body"><tr><td class="empty" colspan="4">Loading route table…</td></tr></tbody></table></div><div class="notice" id="route-notice" role="status"></div>
         </section>
-        <section><div class="section-head"><div><h2>Worker log</h2><div class="section-meta">Most recent 500 events</div></div><button class="button" type="button" id="clear-view">Clear view</button></div><div class="logbox" id="logbox" role="log" aria-live="polite"><div class="empty">Waiting for worker events…</div></div><div class="notice" id="notice" role="status"></div></section>
+        <section><div class="section-head"><div><h2>Client logs</h2><div class="section-meta" id="log-count">Waiting for routes</div></div><button class="button" type="button" id="clear-view">Clear view</button></div><div class="client-logs" id="client-logs"><div class="empty">Waiting for client logs…</div></div><div class="notice" id="notice" role="status"></div></section>
       </div>
     </main>
   </div>
   <script>
     const $ = (selector) => document.querySelector(selector);
     let lastLogId = 0, allRoutes = [], csrfToken = "";
-    const logBox = $("#logbox");
+    const clientLogBoxes = new Map();
     const formatTime = (value) => value ? new Date(value).toLocaleString() : "Never";
     async function api(url, options = {}) {
       const headers = { "Content-Type":"application/json", ...options.headers };
@@ -100,7 +105,24 @@
         const cell=document.createElement("td"),pill=document.createElement("span"); pill.className=`pill${route.enabled ? "" : " off"}`; pill.textContent=route.enabled ? "Enabled" : "Disabled"; cell.append(pill); row.append(cell); body.append(row);
       }
     }
-    async function refreshRoutes() { try { allRoutes=await api("/api/routes"); $("#route-notice").textContent=""; renderRoutes(); } catch(error) { $("#route-notice").textContent=error.message; $("#route-notice").className="notice error"; } }
+    function ensureClientLog(clientId, title) {
+      const key=clientId === null ? "__system__" : String(clientId);
+      if (clientLogBoxes.has(key)) return clientLogBoxes.get(key);
+      const container=$("#client-logs");
+      if (container.querySelector(":scope > .empty")) container.replaceChildren();
+      const panel=document.createElement("div"),heading=document.createElement("h3"),box=document.createElement("div");
+      panel.className="client-log"; heading.className="client-log-title"; heading.textContent=title;
+      box.className="logbox"; box.setAttribute("role","log"); box.setAttribute("aria-live","polite");
+      const empty=document.createElement("div"); empty.className="empty"; empty.textContent="Waiting for events…"; box.append(empty);
+      panel.append(heading,box); container.append(panel); clientLogBoxes.set(key,box); return box;
+    }
+    function renderClientLogPanels() {
+      const clients=[...new Set(allRoutes.map((route)=>String(route.client_id)))];
+      for (const clientId of clients) ensureClientLog(clientId,`Client ${clientId}`);
+      ensureClientLog(null,"System");
+      $("#log-count").textContent=`${clients.length} client${clients.length === 1 ? "" : "s"}`;
+    }
+    async function refreshRoutes() { try { allRoutes=await api("/api/routes"); $("#route-notice").textContent=""; renderRoutes(); renderClientLogPanels(); } catch(error) { $("#route-notice").textContent=error.message; $("#route-notice").className="notice error"; } }
     async function refreshStatus() {
       try {
         const state=await api("/api/status"),label=state.running ? "SFTP transfer running" : state.run_pending ? "SFTP transfer starting" : "Ready for manual transfer";
@@ -112,14 +134,19 @@
     async function refreshLogs() {
       try {
         const entries=await api(`/api/logs?after=${lastLogId}`); if (!entries.length) return;
-        if (logBox.querySelector(".empty")) logBox.replaceChildren();
-        for (const entry of entries) { const line=document.createElement("div"),time=document.createElement("span"),message=document.createElement("span"); line.className=`logline ${entry.level}`; time.className="logtime"; time.textContent=new Date(entry.timestamp).toLocaleTimeString(); message.className="logmessage"; message.textContent=entry.message; line.append(time,message); logBox.append(line); lastLogId=entry.id; }
-        while (logBox.children.length>500) logBox.firstElementChild.remove(); logBox.scrollTop=logBox.scrollHeight;
+        for (const entry of entries) {
+          const clientId=entry.client_id == null ? null : String(entry.client_id);
+          const box=ensureClientLog(clientId,clientId === null ? "System" : `Client ${clientId}`);
+          if (box.querySelector(".empty")) box.replaceChildren();
+          const line=document.createElement("div"),time=document.createElement("span"),message=document.createElement("span");
+          line.className=`logline ${entry.level}`; time.className="logtime"; time.textContent=new Date(entry.timestamp).toLocaleTimeString(); message.className="logmessage"; message.textContent=entry.message; line.append(time,message); box.append(line); lastLogId=entry.id;
+          while (box.children.length>500) box.firstElementChild.remove(); box.scrollTop=box.scrollHeight;
+        }
       } catch(error) { $("#notice").textContent=error.message; $("#notice").className="notice error"; }
     }
     $("#route-search").addEventListener("input",renderRoutes);
     $("#run-button").addEventListener("click",async()=>{ try { await api("/api/run",{method:"POST",body:"{}"}); $("#notice").textContent="SFTP transfer started"; } catch(error) { $("#notice").textContent=error.message; $("#notice").className="notice error"; } refreshStatus(); refreshLogs(); });
-    $("#clear-view").addEventListener("click",()=>{ logBox.replaceChildren(); const empty=document.createElement("div"); empty.className="empty"; empty.textContent="View cleared. New events will appear here."; logBox.append(empty); });
+    $("#clear-view").addEventListener("click",()=>{ for (const box of clientLogBoxes.values()) { box.replaceChildren(); const empty=document.createElement("div"); empty.className="empty"; empty.textContent="View cleared. New events will appear here."; box.append(empty); } });
     async function initialize() { try { const result=await api("/api/csrf"); csrfToken=result.csrf_token; $("#csrf-token").value=csrfToken; refreshRoutes(); refreshStatus(); refreshLogs(); } catch(error) { location.assign("/login"); } }
     initialize(); setInterval(()=>{refreshStatus();refreshLogs();},3000); setInterval(refreshRoutes,15000);
   </script>

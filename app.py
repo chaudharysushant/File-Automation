@@ -1,10 +1,14 @@
 import os
+import hashlib
 import secrets
+import smtplib
+import ssl
 import sys
 import threading
 from collections import deque
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from pathlib import Path
 
 from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
@@ -96,11 +100,139 @@ def create_dashboard_account(username, password_hash):
         conn.close()
 
 
-def record_log(message, level="info"):
+def password_reset_mail_configured():
+    required = (
+        "DASHBOARD_RESET_EMAIL",
+        "DASHBOARD_SMTP_HOST",
+        "DASHBOARD_SMTP_FROM",
+        "DASHBOARD_PUBLIC_URL",
+    )
+    return all(os.getenv(name) for name in required)
+
+
+def save_password_reset(username, token_hash):
+    schema = os.getenv("PG_SCHEMA", "public")
+    conn = psycopg2.connect(**main.get_db_config())
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("""
+                        UPDATE {}.dashboard_account
+                        SET reset_token_hash = %s,
+                            reset_expires_at = CURRENT_TIMESTAMP + INTERVAL '30 minutes'
+                        WHERE account_id = 1 AND username = %s
+                        RETURNING account_id
+                    """).format(sql.Identifier(schema)),
+                    (token_hash, username),
+                )
+                return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def clear_password_reset(token_hash):
+    schema = os.getenv("PG_SCHEMA", "public")
+    conn = psycopg2.connect(**main.get_db_config())
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("""
+                        UPDATE {}.dashboard_account
+                        SET reset_token_hash = NULL, reset_expires_at = NULL
+                        WHERE account_id = 1 AND reset_token_hash = %s
+                    """).format(sql.Identifier(schema)),
+                    (token_hash,),
+                )
+    finally:
+        conn.close()
+
+
+def password_reset_is_valid(token_hash):
+    schema = os.getenv("PG_SCHEMA", "public")
+    conn = psycopg2.connect(**main.get_db_config())
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql.SQL("""
+                    SELECT 1
+                    FROM {}.dashboard_account
+                    WHERE account_id = 1
+                      AND reset_token_hash = %s
+                      AND reset_expires_at > CURRENT_TIMESTAMP
+                """).format(sql.Identifier(schema)),
+                (token_hash,),
+            )
+            return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def update_password_from_reset(token_hash, password_hash):
+    schema = os.getenv("PG_SCHEMA", "public")
+    conn = psycopg2.connect(**main.get_db_config())
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("""
+                        UPDATE {}.dashboard_account
+                        SET password_hash = %s,
+                            reset_token_hash = NULL,
+                            reset_expires_at = NULL
+                        WHERE account_id = 1
+                          AND reset_token_hash = %s
+                          AND reset_expires_at > CURRENT_TIMESTAMP
+                        RETURNING account_id
+                    """).format(sql.Identifier(schema)),
+                    (password_hash, token_hash),
+                )
+                return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def send_password_reset_email(token):
+    host = os.getenv("DASHBOARD_SMTP_HOST")
+    port = int(os.getenv("DASHBOARD_SMTP_PORT", "587"))
+    sender = os.getenv("DASHBOARD_SMTP_FROM")
+    recipient = os.getenv("DASHBOARD_RESET_EMAIL")
+    public_url = os.getenv("DASHBOARD_PUBLIC_URL", "").rstrip("/")
+    reset_url = f"{public_url}{url_for('reset_password', token=token)}"
+
+    message = EmailMessage()
+    message["Subject"] = "Reset your SFTP dashboard password"
+    message["From"] = sender
+    message["To"] = recipient
+    message.set_content(
+        "A password reset was requested for the SFTP dashboard.\n\n"
+        f"Use this one-time link within 30 minutes: {reset_url}\n\n"
+        "If you did not request this, you can ignore this message."
+    )
+
+    username = os.getenv("DASHBOARD_SMTP_USERNAME", "")
+    password = os.getenv("DASHBOARD_SMTP_PASSWORD", "")
+    use_ssl = os.getenv("DASHBOARD_SMTP_USE_SSL", "false").lower() in {"1", "true", "yes"}
+    if use_ssl:
+        with smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=15) as server:
+            if username and password:
+                server.login(username, password)
+            server.send_message(message)
+    else:
+        with smtplib.SMTP(host, port, timeout=15) as server:
+            server.starttls(context=ssl.create_default_context())
+            if username and password:
+                server.login(username, password)
+            server.send_message(message)
+
+
+def record_log(message, level="info", client_id=None):
     global _next_log_id
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with _state_lock:
-        _logs.append({"id": _next_log_id, "timestamp": timestamp, "level": level, "message": str(message)})
+        _logs.append({"id": _next_log_id, "timestamp": timestamp, "level": level,
+                  "message": str(message), "client_id": client_id})
         _next_log_id += 1
     _console.write(f"[{timestamp}] {message}\n")
     _console.flush()
@@ -109,6 +241,7 @@ def record_log(message, level="info"):
 class WorkerLogStream:
     def __init__(self):
         self.pending = ""
+        self.client_id = None
 
     def write(self, value):
         self.pending += value
@@ -125,12 +258,12 @@ class WorkerLogStream:
             self._record(self.pending)
             self.pending = ""
 
-    @staticmethod
-    def _record(message):
+    def _record(self, message):
         global _next_log_id
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with _state_lock:
-            _logs.append({"id": _next_log_id, "timestamp": timestamp, "level": "info", "message": message})
+            _logs.append({"id": _next_log_id, "timestamp": timestamp, "level": "info",
+                          "message": message, "client_id": self.client_id})
             _next_log_id += 1
 
 
@@ -142,18 +275,21 @@ def run_cycle():
         _state["run_pending"] = False
         _state["last_started"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _state["last_error"] = None
+    current_client_id = None
     try:
         log_stream = WorkerLogStream()
         with redirect_stdout(log_stream):
             print("Checking database for active client_ids...")
             for client_id in main.get_client_ids():
+                current_client_id = client_id
+                log_stream.client_id = client_id
                 print(f"Processing client_id: {client_id}")
                 main.copy_files(client_id)
             log_stream.flush()
     except Exception as error:
         with _state_lock:
             _state["last_error"] = str(error)
-        record_log(f"Worker error: {error}", "error")
+        record_log(f"Worker error: {error}", "error", current_client_id)
     finally:
         with _state_lock:
             _state["running"] = False
@@ -173,7 +309,7 @@ def valid_csrf_token():
 
 @app.before_request
 def protect_dashboard():
-    if request.endpoint in {"login", "register"}:
+    if request.endpoint in {"login", "register", "forgot_password", "reset_password"}:
         return None
     if not session.get("authenticated"):
         try:
@@ -235,6 +371,7 @@ def login():
         csrf_token=token,
         error=error,
         registered=request.args.get("registered") == "1",
+        reset=request.args.get("reset") == "1",
     ), status
 
 
@@ -291,6 +428,102 @@ def register():
         error=error,
         register_mode=True,
         registered=False,
+    ), status
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    error = None
+    notice = None
+    status = 200
+    token = get_csrf_token()
+    if request.method == "POST":
+        if not valid_csrf_token():
+            error = "Your form expired. Please try again."
+            status = 400
+        elif not password_reset_mail_configured():
+            error = "Password reset email is not configured. Contact the administrator."
+            status = 503
+        else:
+            username = request.form.get("username", "").strip()
+            reset_token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(reset_token.encode("utf-8")).hexdigest()
+            try:
+                if save_password_reset(username, token_hash):
+                    try:
+                        send_password_reset_email(reset_token)
+                    except Exception:
+                        clear_password_reset(token_hash)
+                        app.logger.exception("Password reset email could not be sent")
+                        error = "Password reset email could not be sent. Contact the administrator."
+                        status = 503
+                if error is None:
+                    notice = "If the account exists, a reset link has been sent to the configured recovery email."
+            except Exception:
+                app.logger.exception("Password reset request failed")
+                error = "Password reset is temporarily unavailable. Contact the administrator."
+                status = 503
+
+    return render_template(
+        "login.html",
+        csrf_token=token,
+        error=error,
+        notice=notice,
+        forgot_mode=True,
+        registered=False,
+        reset=False,
+    ), status
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    try:
+        if not password_reset_is_valid(token_hash):
+            return "This password reset link is invalid or expired.", 400
+    except Exception:
+        app.logger.exception("Password reset storage is unavailable")
+        return "Password reset is temporarily unavailable. Contact the administrator.", 503
+
+    error = None
+    status = 200
+    csrf_token = get_csrf_token()
+    if request.method == "POST":
+        if not valid_csrf_token():
+            error = "Your reset form expired. Please try again."
+            status = 400
+        else:
+            password = request.form.get("password", "")
+            confirmation = request.form.get("confirmation", "")
+            if len(password) < 12 or len(password) > 128:
+                error = "Password must be between 12 and 128 characters."
+                status = 400
+            elif password != confirmation:
+                error = "The passwords do not match."
+                status = 400
+            else:
+                try:
+                    changed = update_password_from_reset(
+                        token_hash,
+                        generate_password_hash(password),
+                    )
+                except Exception:
+                    app.logger.exception("Password reset failed")
+                    error = "Password reset is temporarily unavailable. Contact the administrator."
+                    status = 503
+                else:
+                    if changed:
+                        return redirect(url_for("login", reset="1"))
+                    return "This password reset link is invalid or expired.", 400
+
+    return render_template(
+        "login.html",
+        csrf_token=csrf_token,
+        error=error,
+        reset_mode=True,
+        reset_token=token,
+        registered=False,
+        reset=False,
     ), status
 
 
