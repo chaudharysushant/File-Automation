@@ -1,5 +1,6 @@
 import os
 import hashlib
+import re
 import secrets
 import smtplib
 import ssl
@@ -20,6 +21,13 @@ import main
 
 
 app = Flask(__name__)
+
+PASSWORD_RESET_TTL = timedelta(minutes=30)
+MIN_PASSWORD_LENGTH = 6
+MAX_PASSWORD_LENGTH = 128
+
+# Used to keep the login timing similar whether or not the username exists.
+_DUMMY_PASSWORD_HASH = generate_password_hash("dashboard-placeholder-password")
 
 
 def get_dashboard_secret_key():
@@ -59,6 +67,8 @@ _run_lock = threading.Lock()
 _logs = deque(maxlen=500)
 _next_log_id = 1
 _console = sys.stdout
+_login_attempts = {}
+_login_attempts_lock = threading.Lock()
 _state = {
     "running": False,
     "run_pending": False,
@@ -68,8 +78,19 @@ _state = {
 }
 
 
+def schema():
+    return os.getenv("PG_SCHEMA", "public")
+
+
+def normalize_email(email):
+    return (email or "").strip().lower()
+
+
+def valid_email(email):
+    return len(email) <= 254 and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) is not None
+
+
 def get_routes():
-    schema = os.getenv("PG_SCHEMA", "public")
     conn = psycopg2.connect(**main.get_db_config())
     try:
         with conn.cursor() as cursor:
@@ -78,7 +99,7 @@ def get_routes():
                     SELECT client_id, source, destination, filename_regex, enabled
                     FROM {}.file_route
                     ORDER BY client_id, source, destination
-                """).format(sql.Identifier(schema))
+                """).format(sql.Identifier(schema()))
             )
             return [
                 {"client_id": row[0], "source": row[1], "destination": row[2],
@@ -89,55 +110,65 @@ def get_routes():
         conn.close()
 
 
-def get_dashboard_account():
-    schema = os.getenv("PG_SCHEMA", "public")
+# ---------------------------------------------------------------------------
+# Account storage
+# ---------------------------------------------------------------------------
+
+def get_account_by_username(username):
     conn = psycopg2.connect(**main.get_db_config())
     try:
         with conn.cursor() as cursor:
             cursor.execute(
                 sql.SQL("""
-                    SELECT username, password_hash
+                    SELECT account_id, username, email, password_hash
                     FROM {}.dashboard_account
-                    WHERE account_id = 1
-                """).format(sql.Identifier(schema))
+                    WHERE LOWER(username) = LOWER(%s)
+                """).format(sql.Identifier(schema())),
+                (username,),
             )
             return cursor.fetchone()
     finally:
         conn.close()
 
 
-def create_dashboard_account(username, password_hash):
-    schema = os.getenv("PG_SCHEMA", "public")
+def get_account_by_email(email):
+    conn = psycopg2.connect(**main.get_db_config())
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql.SQL("""
+                    SELECT account_id, username, email, password_hash
+                    FROM {}.dashboard_account
+                    WHERE email IS NOT NULL AND LOWER(email) = %s
+                """).format(sql.Identifier(schema())),
+                (email,),
+            )
+            return cursor.fetchone()
+    finally:
+        conn.close()
+
+
+def create_account(username, email, password_hash):
     conn = psycopg2.connect(**main.get_db_config())
     try:
         with conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     sql.SQL("""
-                        INSERT INTO {}.dashboard_account (account_id, username, password_hash)
-                        VALUES (1, %s, %s)
-                        ON CONFLICT (account_id) DO NOTHING
+                        INSERT INTO {}.dashboard_account (username, email, password_hash)
+                        VALUES (%s, %s, %s)
                         RETURNING account_id
-                    """).format(sql.Identifier(schema)),
-                    (username, password_hash),
+                    """).format(sql.Identifier(schema())),
+                    (username, email, password_hash),
                 )
                 return cursor.fetchone() is not None
+    except psycopg2.errors.UniqueViolation:
+        return False
     finally:
         conn.close()
 
 
-def password_reset_mail_configured():
-    required = (
-        "DASHBOARD_RESET_EMAIL",
-        "DASHBOARD_SMTP_HOST",
-        "DASHBOARD_SMTP_FROM",
-        "DASHBOARD_PUBLIC_URL",
-    )
-    return all(os.getenv(name) for name in required)
-
-
-def save_password_reset(username, token_hash):
-    schema = os.getenv("PG_SCHEMA", "public")
+def save_password_reset(email, token_hash):
     conn = psycopg2.connect(**main.get_db_config())
     try:
         with conn:
@@ -147,10 +178,10 @@ def save_password_reset(username, token_hash):
                         UPDATE {}.dashboard_account
                         SET reset_token_hash = %s,
                             reset_expires_at = CURRENT_TIMESTAMP + INTERVAL '30 minutes'
-                        WHERE account_id = 1 AND username = %s
+                        WHERE email IS NOT NULL AND LOWER(email) = %s
                         RETURNING account_id
-                    """).format(sql.Identifier(schema)),
-                    (token_hash, username),
+                    """).format(sql.Identifier(schema())),
+                    (token_hash, email),
                 )
                 return cursor.fetchone() is not None
     finally:
@@ -158,7 +189,6 @@ def save_password_reset(username, token_hash):
 
 
 def clear_password_reset(token_hash):
-    schema = os.getenv("PG_SCHEMA", "public")
     conn = psycopg2.connect(**main.get_db_config())
     try:
         with conn:
@@ -167,36 +197,34 @@ def clear_password_reset(token_hash):
                     sql.SQL("""
                         UPDATE {}.dashboard_account
                         SET reset_token_hash = NULL, reset_expires_at = NULL
-                        WHERE account_id = 1 AND reset_token_hash = %s
-                    """).format(sql.Identifier(schema)),
+                        WHERE reset_token_hash = %s
+                    """).format(sql.Identifier(schema())),
                     (token_hash,),
                 )
     finally:
         conn.close()
 
 
-def password_reset_is_valid(token_hash):
-    schema = os.getenv("PG_SCHEMA", "public")
+def password_reset_account(token_hash):
     conn = psycopg2.connect(**main.get_db_config())
     try:
         with conn.cursor() as cursor:
             cursor.execute(
                 sql.SQL("""
-                    SELECT 1
+                    SELECT account_id
                     FROM {}.dashboard_account
-                    WHERE account_id = 1
-                      AND reset_token_hash = %s
+                    WHERE reset_token_hash = %s
                       AND reset_expires_at > CURRENT_TIMESTAMP
-                """).format(sql.Identifier(schema)),
+                """).format(sql.Identifier(schema())),
                 (token_hash,),
             )
-            return cursor.fetchone() is not None
+            row = cursor.fetchone()
+            return row[0] if row else None
     finally:
         conn.close()
 
 
 def update_password_from_reset(token_hash, password_hash):
-    schema = os.getenv("PG_SCHEMA", "public")
     conn = psycopg2.connect(**main.get_db_config())
     try:
         with conn:
@@ -207,11 +235,10 @@ def update_password_from_reset(token_hash, password_hash):
                         SET password_hash = %s,
                             reset_token_hash = NULL,
                             reset_expires_at = NULL
-                        WHERE account_id = 1
-                          AND reset_token_hash = %s
+                        WHERE reset_token_hash = %s
                           AND reset_expires_at > CURRENT_TIMESTAMP
                         RETURNING account_id
-                    """).format(sql.Identifier(schema)),
+                    """).format(sql.Identifier(schema())),
                     (password_hash, token_hash),
                 )
                 return cursor.fetchone() is not None
@@ -219,27 +246,43 @@ def update_password_from_reset(token_hash, password_hash):
         conn.close()
 
 
-def send_password_reset_email(token):
-    host = os.getenv("DASHBOARD_SMTP_HOST")
+# ---------------------------------------------------------------------------
+# Password reset tokens
+# ---------------------------------------------------------------------------
+
+def token_digest(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Email
+# ---------------------------------------------------------------------------
+
+def smtp_configured():
+    return bool(os.getenv("DASHBOARD_SMTP_HOST") and os.getenv("DASHBOARD_SMTP_FROM"))
+
+
+def password_reset_mail_configured():
+    return smtp_configured() and bool(os.getenv("DASHBOARD_PUBLIC_URL"))
+
+
+def send_email(recipient, subject, body):
+    host = (os.getenv("DASHBOARD_SMTP_HOST") or "").strip()
+    sender = (os.getenv("DASHBOARD_SMTP_FROM") or "").strip()
+    if not host or not sender:
+        raise RuntimeError("SMTP is not configured")
+
     port = int(os.getenv("DASHBOARD_SMTP_PORT", "587"))
-    sender = os.getenv("DASHBOARD_SMTP_FROM")
-    recipient = os.getenv("DASHBOARD_RESET_EMAIL")
-    public_url = os.getenv("DASHBOARD_PUBLIC_URL", "").rstrip("/")
-    reset_url = f"{public_url}{url_for('reset_password', token=token)}"
-
-    message = EmailMessage()
-    message["Subject"] = "Reset your SFTP dashboard password"
-    message["From"] = sender
-    message["To"] = recipient
-    message.set_content(
-        "A password reset was requested for the SFTP dashboard.\n\n"
-        f"Use this one-time link within 30 minutes: {reset_url}\n\n"
-        "If you did not request this, you can ignore this message."
-    )
-
     username = os.getenv("DASHBOARD_SMTP_USERNAME", "")
     password = os.getenv("DASHBOARD_SMTP_PASSWORD", "")
     use_ssl = os.getenv("DASHBOARD_SMTP_USE_SSL", "false").lower() in {"1", "true", "yes"}
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = sender
+    message["To"] = recipient
+    message.set_content(body)
+
     if use_ssl:
         with smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=15) as server:
             if username and password:
@@ -247,10 +290,59 @@ def send_password_reset_email(token):
             server.send_message(message)
     else:
         with smtplib.SMTP(host, port, timeout=15) as server:
+            server.ehlo()
             server.starttls(context=ssl.create_default_context())
             if username and password:
                 server.login(username, password)
             server.send_message(message)
+
+
+def send_password_reset_email(token, recipient):
+    public_url = (os.getenv("DASHBOARD_PUBLIC_URL") or "").rstrip("/")
+    reset_url = f"{public_url}{url_for('reset_password', token=token)}"
+    send_email(
+        recipient,
+        "Reset your SFTP dashboard password",
+        "A password reset was requested for the SFTP dashboard.\n\n"
+        f"Use this one-time link within {int(PASSWORD_RESET_TTL.total_seconds() // 60)} minutes:\n"
+        f"{reset_url}\n\n"
+        "If you did not request this, you can ignore this message.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Request helpers
+# ---------------------------------------------------------------------------
+
+def get_csrf_token():
+    return session.setdefault("csrf_token", secrets.token_urlsafe(32))
+
+
+def valid_csrf_token():
+    expected = session.get("csrf_token", "")
+    supplied = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token", "")
+    return bool(expected and supplied and secrets.compare_digest(expected, supplied))
+
+
+def login_is_throttled(address):
+    now = datetime.now(timezone.utc)
+    with _login_attempts_lock:
+        attempts = [when for when in _login_attempts.get(address, []) if now - when < timedelta(minutes=5)]
+        _login_attempts[address] = attempts
+        return len(attempts) >= 10
+
+
+def record_login_failure(address):
+    now = datetime.now(timezone.utc)
+    with _login_attempts_lock:
+        attempts = [when for when in _login_attempts.get(address, []) if now - when < timedelta(minutes=5)]
+        attempts.append(now)
+        _login_attempts[address] = attempts
+
+
+def clear_login_failures(address):
+    with _login_attempts_lock:
+        _login_attempts.pop(address, None)
 
 
 def record_log(message, level="info", client_id=None):
@@ -323,33 +415,16 @@ def run_cycle():
         _run_lock.release()
 
 
-def get_csrf_token():
-    return session.setdefault("csrf_token", secrets.token_urlsafe(32))
-
-
-def valid_csrf_token():
-    expected = session.get("csrf_token", "")
-    supplied = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token", "")
-    return bool(expected and supplied and secrets.compare_digest(expected, supplied))
-
+# ---------------------------------------------------------------------------
+# Authentication routes
+# ---------------------------------------------------------------------------
 
 @app.before_request
 def protect_dashboard():
-    if request.endpoint in {"login", "register", "forgot_password", "reset_password"}:
+    if request.endpoint in {"login", "register",
+                            "forgot_password", "reset_password"}:
         return None
     if not session.get("authenticated"):
-        try:
-            account = get_dashboard_account()
-        except Exception:
-            app.logger.exception("Dashboard account storage is unavailable")
-            message = "Dashboard account storage is unavailable. Apply create_dashboard_account.sql."
-            if request.path.startswith("/api/"):
-                return jsonify({"error": message}), 503
-            return message, 503
-        if account is None:
-            if request.path.startswith("/api/"):
-                return jsonify({"error": "Dashboard registration is required"}), 401
-            return redirect(url_for("register"))
         if request.path.startswith("/api/"):
             return jsonify({"error": "Authentication required"}), 401
         return redirect(url_for("login"))
@@ -365,30 +440,33 @@ def login():
     error = None
     status = 200
     token = get_csrf_token()
-    try:
-        account = get_dashboard_account()
-    except Exception:
-        app.logger.exception("Dashboard account storage is unavailable")
-        return "Dashboard account storage is unavailable. Apply create_dashboard_account.sql.", 503
-    if account is None:
-        return redirect(url_for("register"))
-
     if request.method == "POST":
         if not valid_csrf_token():
             error = "Your sign-in form expired. Please try again."
             status = 400
+        elif login_is_throttled(request.remote_addr or "unknown"):
+            error = "Too many sign-in attempts. Please wait a few minutes and try again."
+            status = 429
         else:
-            username = request.form.get("username", "")
+            username = request.form.get("username", "").strip()
             password = request.form.get("password", "")
-            stored_username, password_hash = account
-            valid_username = secrets.compare_digest(username, stored_username)
+            try:
+                account = get_account_by_username(username)
+            except Exception:
+                app.logger.exception("Dashboard account storage is unavailable")
+                return "Dashboard account storage is unavailable. Apply create_dashboard_account.sql.", 503
+            password_hash = account[3] if account else _DUMMY_PASSWORD_HASH
             valid_password = check_password_hash(password_hash, password)
-            if valid_username and valid_password:
+            if account and valid_password:
+                clear_login_failures(request.remote_addr or "unknown")
                 session.clear()
                 session["authenticated"] = True
+                session["account_id"] = account[0]
+                session["username"] = account[1]
                 session["csrf_token"] = secrets.token_urlsafe(32)
                 session.permanent = True
                 return redirect(url_for("index"))
+            record_login_failure(request.remote_addr or "unknown")
             error = "Username or password is incorrect."
             status = 401
 
@@ -406,47 +484,43 @@ def register():
     if session.get("authenticated"):
         return redirect(url_for("index"))
 
-    try:
-        if get_dashboard_account() is not None:
-            return redirect(url_for("login"))
-    except Exception:
-        app.logger.exception("Dashboard account storage is unavailable")
-        return "Dashboard account storage is unavailable. Apply create_dashboard_account.sql.", 503
-
     error = None
     status = 200
     token = get_csrf_token()
     if request.method == "POST":
         if not valid_csrf_token():
-            error = "Your registration form expired. Please try again."
+            error = "Your sign-up form expired. Please try again."
             status = 400
         else:
             username = request.form.get("username", "").strip()
+            email = normalize_email(request.form.get("email", ""))
             password = request.form.get("password", "")
             confirmation = request.form.get("confirmation", "")
             if len(username) < 3 or len(username) > 64:
                 error = "Username must be between 3 and 64 characters."
                 status = 400
-            elif len(password) < 12 or len(password) > 128:
-                error = "Password must be between 12 and 128 characters."
+            elif not valid_email(email):
+                error = "Enter a valid email address."
+                status = 400
+            elif len(password) < MIN_PASSWORD_LENGTH or len(password) > MAX_PASSWORD_LENGTH:
+                error = f"Password must be between {MIN_PASSWORD_LENGTH} and {MAX_PASSWORD_LENGTH} characters."
                 status = 400
             elif password != confirmation:
                 error = "The passwords do not match."
                 status = 400
             else:
                 try:
-                    created = create_dashboard_account(
-                        username,
-                        generate_password_hash(password),
-                    )
+                    created = create_account(username, email, generate_password_hash(password))
                 except Exception:
-                    app.logger.exception("Dashboard account registration failed")
+                    app.logger.exception("Unable to create the account")
                     error = "Unable to create the account. Check the database and try again."
                     status = 503
                 else:
-                    if created:
+                    if not created:
+                        error = "That username or email is already registered. Sign in instead."
+                        status = 409
+                    else:
                         return redirect(url_for("login", registered="1"))
-                    return redirect(url_for("login"))
 
     return render_template(
         "login.html",
@@ -454,6 +528,8 @@ def register():
         error=error,
         register_mode=True,
         registered=False,
+        form_username=request.form.get("username", ""),
+        form_email=request.form.get("email", ""),
     ), status
 
 
@@ -471,24 +547,28 @@ def forgot_password():
             error = "Password reset email is not configured. Contact the administrator."
             status = 503
         else:
-            username = request.form.get("username", "").strip()
-            reset_token = secrets.token_urlsafe(32)
-            token_hash = hashlib.sha256(reset_token.encode("utf-8")).hexdigest()
-            try:
-                if save_password_reset(username, token_hash):
-                    try:
-                        send_password_reset_email(reset_token)
-                    except Exception:
-                        clear_password_reset(token_hash)
-                        app.logger.exception("Password reset email could not be sent")
-                        error = "Password reset email could not be sent. Contact the administrator."
-                        status = 503
-                if error is None:
-                    notice = "If the account exists, a reset link has been sent to the configured recovery email."
-            except Exception:
-                app.logger.exception("Password reset request failed")
-                error = "Password reset is temporarily unavailable. Contact the administrator."
-                status = 503
+            email = normalize_email(request.form.get("email", ""))
+            if not valid_email(email):
+                error = "Enter a valid email address."
+                status = 400
+            else:
+                reset_token = secrets.token_urlsafe(32)
+                token_hash = token_digest(reset_token)
+                try:
+                    if save_password_reset(email, token_hash):
+                        try:
+                            send_password_reset_email(reset_token, email)
+                        except Exception:
+                            clear_password_reset(token_hash)
+                            app.logger.exception("Password reset email could not be sent")
+                            error = "Password reset email could not be sent. Contact the administrator."
+                            status = 503
+                    if error is None:
+                        notice = "If an account exists for that email, a reset link has been sent."
+                except Exception:
+                    app.logger.exception("Password reset request failed")
+                    error = "Password reset is temporarily unavailable. Contact the administrator."
+                    status = 503
 
     return render_template(
         "login.html",
@@ -503,9 +583,9 @@ def forgot_password():
 
 @app.route("/reset-password/<token>", methods=["GET", "POST"])
 def reset_password(token):
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    token_hash = token_digest(token)
     try:
-        if not password_reset_is_valid(token_hash):
+        if password_reset_account(token_hash) is None:
             return "This password reset link is invalid or expired.", 400
     except Exception:
         app.logger.exception("Password reset storage is unavailable")
@@ -521,18 +601,15 @@ def reset_password(token):
         else:
             password = request.form.get("password", "")
             confirmation = request.form.get("confirmation", "")
-            if len(password) < 12 or len(password) > 128:
-                error = "Password must be between 12 and 128 characters."
+            if len(password) < MIN_PASSWORD_LENGTH or len(password) > MAX_PASSWORD_LENGTH:
+                error = f"Password must be between {MIN_PASSWORD_LENGTH} and {MAX_PASSWORD_LENGTH} characters."
                 status = 400
             elif password != confirmation:
                 error = "The passwords do not match."
                 status = 400
             else:
                 try:
-                    changed = update_password_from_reset(
-                        token_hash,
-                        generate_password_hash(password),
-                    )
+                    changed = update_password_from_reset(token_hash, generate_password_hash(password))
                 except Exception:
                     app.logger.exception("Password reset failed")
                     error = "Password reset is temporarily unavailable. Contact the administrator."
