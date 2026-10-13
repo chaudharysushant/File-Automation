@@ -121,19 +121,17 @@
       clientCell.append(name, count)
 
       const routeCell = document.createElement('td')
-      if (routes.length > 1) {
-        const details = document.createElement('details')
-        details.className = 'route-details'
-        const summary = document.createElement('summary')
-        summary.textContent = 'View route details'
-        const list = document.createElement('ul')
-        list.className = 'route-detail-list'
-        for (const route of routes) list.append(makeRouteDetail(route))
-        details.append(summary, list)
-        routeCell.append(details)
-      } else {
-        routeCell.append(makeRouteDetail(routes[0]))
-      }
+      const details = document.createElement('details')
+      details.className = 'route-details'
+      const summary = document.createElement('summary')
+      summary.textContent = routes.length > 1
+        ? `View source & destination (${routes.length})`
+        : 'View source & destination'
+      const list = document.createElement('ul')
+      list.className = 'route-detail-list'
+      for (const route of routes) list.append(makeRouteDetail(route))
+      details.append(summary, list)
+      routeCell.append(details)
 
       const stateCell = document.createElement('td')
       const enabled = routes.filter((route) => route.enabled).length
