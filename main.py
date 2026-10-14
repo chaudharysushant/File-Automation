@@ -42,6 +42,14 @@ def get_db_config():
     return config
 
 
+def get_base_path():
+    return Path(os.getenv("FILE_ROUTE_BASE_PATH", "/home/ubuntu/file-automation/satish"))
+
+
+def resolve_route_path(stored_path):
+    return get_base_path() / stored_path
+
+
 def get_client_ids():
     conn = psycopg2.connect(**get_db_config())
 
@@ -108,8 +116,8 @@ def copy_files(client_id=None):
         routes = get_route(current_client_id)
 
         for source_path, destination_path, filename_regex in routes:
-            source = Path(source_path)
-            destination = Path(destination_path)
+            source = resolve_route_path(source_path)
+            destination = resolve_route_path(destination_path)
 
             print(f"Checking source: {source!r}", flush=True)
             print(f"Checking destination: {destination!r}", flush=True)

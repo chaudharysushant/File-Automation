@@ -102,7 +102,9 @@ def get_routes():
                 """).format(sql.Identifier(schema()))
             )
             return [
-                {"client_id": row[0], "source": row[1], "destination": row[2],
+                {"client_id": row[0],
+                 "source": str(main.resolve_route_path(row[1])),
+                 "destination": str(main.resolve_route_path(row[2])),
                  "filename_regex": row[3], "enabled": row[4]}
                 for row in cursor.fetchall()
             ]

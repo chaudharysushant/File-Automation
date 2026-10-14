@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>{% if register_mode %}Sign up{% elif forgot_mode %}Forgot password{% elif reset_mode %}Choose password{% else %}Sign in{% endif %} | SFTP Operations</title>
+  <title>{% if register_mode %}Sign up{% elif verify_mode %}Verify email{% elif forgot_mode %}Forgot password{% elif reset_mode %}Choose password{% else %}Sign in{% endif %} | SFTP Operations</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -29,6 +29,7 @@
     .success { margin:0 0 16px; color:#18845b; font-size:12px; }
     .form-link { display:inline-block; margin-top:16px; margin-right:14px; color:var(--blue); font-size:12px; text-decoration:none; }
     .form-link:hover { text-decoration:underline; }
+    .code { letter-spacing:.5em; text-align:center; font:600 20px var(--mono); }
     @keyframes arrive { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
     @media(prefers-reduced-motion:reduce) { .panel { animation:none; } }
   </style>
@@ -37,16 +38,32 @@
   <main class="panel">
     <div class="brand"><span class="mark" aria-hidden="true">ST</span><span>SFTP Operations</span></div>
     <div class="eyebrow">Dashboard access</div>
-    <h1>{% if register_mode %}Create account{% elif forgot_mode %}Forgot password{% elif reset_mode %}Choose a new password{% else %}Sign in{% endif %}</h1>
+    <h1>{% if register_mode %}Create account{% elif verify_mode %}Verify your email{% elif forgot_mode %}Forgot password{% elif reset_mode %}Choose a new password{% else %}Sign in{% endif %}</h1>
 
     {% if registered %}<p class="success" role="status">Account created. Sign in to continue.</p>{% endif %}
     {% if reset %}<p class="success" role="status">Password updated. Sign in to continue.</p>{% endif %}
     {% if notice %}<p class="success" role="status">{{ notice }}</p>{% endif %}
 
+    {% if verify_mode %}
+    <p class="hint">Enter the 6-digit code we sent to <strong>{{ pending_email }}</strong>.</p>
+    <form method="post" action="/verify-email">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="code">Verification code</label>
+      <input id="code" class="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required autofocus>
+      <button type="submit">Verify email</button>
+      {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    </form>
+    <form method="post" action="/verify-email">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="action" value="resend">
+      <button type="submit" class="secondary">Resend code</button>
+    </form>
+    <a class="form-link" href="/register">Use a different email</a>
+    {% else %}
     <form method="post" action="{% if register_mode %}/register{% elif forgot_mode %}/forgot-password{% elif reset_mode %}/reset-password/{{ reset_token }}{% else %}/login{% endif %}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-      {% if not forgot_mode and not reset_mode %}
+      {% if not forgot_mode %}
       <label for="username">Username</label>
       <input id="username" name="username" type="text" autocomplete="username" minlength="3" maxlength="64" value="{{ form_username|default('') }}" required {% if not register_mode %}autofocus{% endif %}>
       {% endif %}
@@ -63,18 +80,19 @@
 
       {% if not forgot_mode %}
       <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="{% if register_mode or reset_mode %}new-password{% else %}current-password{% endif %}" {% if register_mode or reset_mode %}minlength="6" maxlength="128" required{% else %}required{% endif %}>
+      <input id="password" name="password" type="password" autocomplete="{% if register_mode %}new-password{% else %}current-password{% endif %}" {% if register_mode or reset_mode %}minlength="6" maxlength="128" required{% else %}required{% endif %}>
       {% if register_mode or reset_mode %}
       <label for="confirmation">Confirm password</label>
       <input id="confirmation" name="confirmation" type="password" autocomplete="new-password" minlength="6" maxlength="128" required>
       {% endif %}
       {% endif %}
 
-      <button type="submit">{% if register_mode %}Create account{% elif forgot_mode %}Send reset link{% elif reset_mode %}Update password{% else %}Sign in{% endif %}</button>
+      <button type="submit">{% if register_mode %}Send verification code{% elif forgot_mode %}Send reset link{% elif reset_mode %}Update password{% else %}Sign in{% endif %}</button>
       {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
     </form>
+    {% endif %}
 
-    {% if not register_mode and not forgot_mode and not reset_mode %}
+    {% if not register_mode and not forgot_mode and not reset_mode and not verify_mode %}
     <a class="form-link" href="/forgot-password">Forgot password?</a>
     <a class="form-link" href="/register">Create an account</a>
     {% endif %}
