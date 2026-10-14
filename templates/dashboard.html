@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
   <link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.34.1/dist/tabler-icons.min.css" rel="stylesheet">
-  <link href="{{ url_for('static', filename='css/dashboard.css', v='2') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/dashboard.css', v='3') }}" rel="stylesheet">
 </head>
 <body>
   <div class="page">
@@ -63,8 +63,8 @@
           <div class="page-heading-row">
             <div>
               <div class="page-pretitle">FILE AUTOMATION</div>
-              <h2 class="page-title">Transfer overview</h2>
-              <p class="page-description">Monitor configured client routes and manual file syncs.</p>
+              <h2 class="page-title">Transfer overview <span class="badge bg-secondary-lt align-middle" id="mode-badge">Manual</span></h2>
+              <p class="page-description">Monitor configured client routes, run manual or per-client transfers, and enable hourly automatic processing.</p>
             </div>
             <button class="btn btn-primary" id="run-button" type="button" disabled>
               <i class="ti ti-player-play me-2"></i><span>Start transfer</span>
@@ -74,6 +74,11 @@
           <div class="alert alert-danger alert-dismissible d-none" id="dashboard-error" role="alert" aria-live="assertive">
             <i class="ti ti-alert-circle me-2"></i><span id="error-message"></span>
             <button class="btn-close" id="dismiss-error" type="button" aria-label="Dismiss"></button>
+          </div>
+
+          <div class="alert alert-success alert-dismissible d-none" id="dashboard-notice" role="status" aria-live="polite">
+            <i class="ti ti-circle-check me-2"></i><span id="notice-message"></span>
+            <button class="btn-close" id="dismiss-notice" type="button" aria-label="Dismiss"></button>
           </div>
 
           <section class="row row-cards summary-cards" aria-label="Transfer summary">
@@ -99,6 +104,24 @@
             </div>
           </section>
 
+          <section class="card section-card" id="automation" aria-labelledby="automation-title">
+            <div class="card-header section-header">
+              <div><h3 class="card-title" id="automation-title">Automatic mode</h3><div class="text-secondary small">Background checks for eligible files on a fixed interval</div></div>
+              <label class="form-check form-switch auto-switch mb-0">
+                <input class="form-check-input" type="checkbox" role="switch" id="auto-mode-toggle" aria-label="Toggle automatic mode">
+                <span class="form-check-label" id="auto-mode-label">Disabled</span>
+              </label>
+            </div>
+            <div class="card-body">
+              <div class="auto-grid">
+                <div><div class="auto-label">STATUS</div><div class="auto-value" id="auto-status">Disabled</div></div>
+                <div><div class="auto-label">LAST CHECK</div><div class="auto-value" id="auto-last">Never</div></div>
+                <div><div class="auto-label">NEXT CHECK</div><div class="auto-value" id="auto-next">Not scheduled</div></div>
+                <div><div class="auto-label">LAST RESULT</div><div class="auto-value" id="auto-result">—</div></div>
+              </div>
+            </div>
+          </section>
+
           <section class="card section-card activity-chart-card" aria-labelledby="activity-chart-title">
             <div class="card-header section-header">
               <div><h3 class="card-title" id="activity-chart-title">Activity pulse</h3><div class="text-secondary small">Log events by hour · recent 12 hours</div></div>
@@ -121,8 +144,8 @@
             </div>
             <div class="table-responsive">
               <table class="table table-vcenter card-table route-table">
-                <thead><tr><th>CLIENT</th><th>ROUTES</th><th>STATE</th><th class="text-end">LOGS</th></tr></thead>
-                <tbody id="routes-body"><tr><td colspan="4"><div class="table-state"><span class="spinner-border spinner-border-sm me-2" role="status"></span>Loading configured routes…</div></td></tr></tbody>
+                <thead><tr><th>CLIENT</th><th>CARRIER</th><th>ROUTES</th><th>STATE</th><th class="text-end">ACTIONS</th></tr></thead>
+                <tbody id="routes-body"><tr><td colspan="5"><div class="table-state"><span class="spinner-border spinner-border-sm me-2" role="status"></span>Loading configured routes…</div></td></tr></tbody>
               </table>
             </div>
             <div class="empty-state d-none" id="routes-empty"><i class="ti ti-route-2"></i><strong>No client routes</strong><span>There are no routes to display for this search.</span></div>
@@ -159,6 +182,6 @@
   </dialog>
   <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta21/dist/js/tabler.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
-  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=2" defer></script>
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=3" defer></script>
 </body>
 </html>

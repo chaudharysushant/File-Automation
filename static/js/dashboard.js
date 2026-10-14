@@ -8,6 +8,7 @@
     activeClient: null,
     clientLogs: [],
     activityChart: null,
+    autoMode: false,
   }
 
   async function api(url, options = {}) {
@@ -44,6 +45,16 @@
     $('#error-message').textContent = ''
   }
 
+  function showNotice(message) {
+    $('#notice-message').textContent = message
+    $('#dashboard-notice').classList.remove('d-none')
+  }
+
+  function clearNotice() {
+    $('#dashboard-notice').classList.add('d-none')
+    $('#notice-message').textContent = ''
+  }
+
   function formatDate(value) {
     if (!value) return 'Never'
     const date = new Date(value)
@@ -52,6 +63,29 @@
 
   function clientKey(clientId) {
     return clientId == null ? '' : String(clientId)
+  }
+
+  function distinctCarriers(routes) {
+    const seen = new Set()
+    for (const route of routes) {
+      const carrier = String(route.carrier || '').trim()
+      if (carrier) seen.add(carrier)
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b))
+  }
+
+  function renderAutoMode(status) {
+    state.autoMode = Boolean(status.auto_mode)
+    const toggle = $('#auto-mode-toggle')
+    toggle.checked = state.autoMode
+    $('#auto-mode-label').textContent = state.autoMode ? 'Enabled' : 'Disabled'
+    $('#auto-status').textContent = state.autoMode ? 'Enabled' : 'Disabled'
+    $('#auto-last').textContent = status.last_check ? formatDate(status.last_check) : 'Never'
+    $('#auto-next').textContent = state.autoMode ? formatDate(status.next_check) : 'Not scheduled'
+    $('#auto-result').textContent = status.last_result || '—'
+    const badge = $('#mode-badge')
+    badge.textContent = state.autoMode ? 'Automatic' : 'Manual'
+    badge.className = `badge align-middle ${state.autoMode ? 'bg-blue-lt' : 'bg-secondary-lt'}`
   }
 
   function levelFor(entry) {
@@ -81,6 +115,9 @@
     $('#last-value').textContent = formatDate(status.last_finished)
     $('#last-caption').textContent = status.last_finished ? 'Most recent completed run' : 'No completed transfer recorded'
     $('#log-count').textContent = String(status.log_count ?? state.logs.length)
+    document.querySelectorAll('.route-transfer-button').forEach((button) => {
+      button.disabled = active || button.dataset.hasRoutes !== 'true'
+    })
   }
 
   function renderRoutes() {
@@ -120,6 +157,17 @@
       count.textContent = `${routes.length} route${routes.length === 1 ? '' : 's'}`
       clientCell.append(name, count)
 
+      const carrierCell = document.createElement('td')
+      const carriers = distinctCarriers(routes)
+      if (carriers.length) {
+        for (const carrier of carriers) carrierCell.append(makeBadge(carrier, 'azure'))
+      } else {
+        const none = document.createElement('span')
+        none.className = 'text-secondary'
+        none.textContent = '—'
+        carrierCell.append(none)
+      }
+
       const routeCell = document.createElement('td')
       const details = document.createElement('details')
       details.className = 'route-details'
@@ -140,7 +188,20 @@
       else stateCell.append(makeBadge('Mixed', 'yellow'))
 
       const actionCell = document.createElement('td')
-      actionCell.className = 'text-end'
+      actionCell.className = 'text-end text-nowrap'
+      const transferButton = document.createElement('button')
+      transferButton.className = 'btn btn-sm btn-primary route-transfer-button'
+      transferButton.type = 'button'
+      transferButton.dataset.clientId = clientId
+      transferButton.dataset.hasRoutes = String(Boolean(clientId) && enabled > 0)
+      if (clientId && enabled > 0) {
+        transferButton.disabled = false
+      } else {
+        transferButton.disabled = true
+        transferButton.title = 'Enable a route for this client to transfer'
+      }
+      transferButton.setAttribute('aria-label', `Transfer files for ${clientId || 'client without an ID'}`)
+      transferButton.innerHTML = '<i class="ti ti-player-play me-1" aria-hidden="true"></i>Transfer'
       const logButton = document.createElement('button')
       logButton.className = 'btn btn-sm btn-outline-secondary route-log-button'
       logButton.type = 'button'
@@ -148,8 +209,8 @@
       logButton.dataset.noClient = clientId ? 'false' : 'true'
       logButton.setAttribute('aria-label', `View logs for ${clientId || 'client without an ID'}`)
       logButton.innerHTML = '<i class="ti ti-list-details me-1" aria-hidden="true"></i>Logs'
-      actionCell.append(logButton)
-      row.append(clientCell, routeCell, stateCell, actionCell)
+      actionCell.append(transferButton, logButton)
+      row.append(clientCell, carrierCell, routeCell, stateCell, actionCell)
       body.append(row)
     }
   }
@@ -317,6 +378,7 @@
   async function refreshStatus() {
     const status = await api('/api/status')
     setWorkerStatus(status)
+    renderAutoMode(status)
   }
 
   async function refreshRoutes() {
@@ -369,6 +431,52 @@
     }
   }
 
+  async function runClientTransfer(button) {
+    const clientId = button.dataset.clientId
+    if (!clientId || button.disabled) return
+    clearError()
+    const original = button.innerHTML
+    button.disabled = true
+    button.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>Starting'
+    try {
+      const result = await api('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId }),
+      })
+      showNotice(`Transfer started for client ${result.client_id || clientId}.`)
+      await Promise.allSettled([refreshStatus(), refreshLogs()])
+    } catch (error) {
+      showError(safeError(error))
+    } finally {
+      button.innerHTML = original
+      button.disabled = button.dataset.hasRoutes !== 'true'
+      refreshStatus().catch(() => {})
+    }
+  }
+
+  async function toggleAutoMode(checkbox) {
+    const enabled = checkbox.checked
+    checkbox.disabled = true
+    clearError()
+    try {
+      await api('/api/auto-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      })
+      showNotice(enabled
+        ? 'Automatic mode enabled. Eligible files will be processed on the configured interval.'
+        : 'Automatic mode disabled. No future automatic checks will run.')
+      await refreshStatus()
+    } catch (error) {
+      checkbox.checked = !enabled
+      showError(safeError(error))
+    } finally {
+      checkbox.disabled = false
+    }
+  }
+
   function setTheme(theme) {
     document.documentElement.dataset.bsTheme = theme
     try {
@@ -388,6 +496,11 @@
   }
 
   $('#routes-body').addEventListener('click', (event) => {
+    const transfer = event.target.closest('.route-transfer-button')
+    if (transfer) {
+      runClientTransfer(transfer)
+      return
+    }
     const button = event.target.closest('.route-log-button')
     if (button) openClientLog(button)
   })
@@ -406,13 +519,16 @@
     clearError()
     try {
       await api('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      showNotice('Transfer started for all eligible clients.')
       await Promise.allSettled([refreshStatus(), refreshLogs()])
     } catch (error) {
       showError(safeError(error))
       $('#run-button').disabled = false
     }
   })
+  $('#auto-mode-toggle').addEventListener('change', (event) => toggleAutoMode(event.target))
   $('#dismiss-error').addEventListener('click', clearError)
+  $('#dismiss-notice').addEventListener('click', clearNotice)
   $('#close-client-log').addEventListener('click', () => $('#client-log-dialog').close())
   $('#client-log-dialog').addEventListener('click', (event) => {
     if (event.target === $('#client-log-dialog')) $('#client-log-dialog').close()

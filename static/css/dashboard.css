@@ -113,6 +113,15 @@ html[data-bs-theme="dark"] .icon-amber { color: #e2c28c; background: #443b2e; }
 .route-state.enabled { color: #278668; }
 .route-state.disabled { color: var(--ops-muted); }
 .route-log-button { white-space: nowrap; }
+.route-transfer-button { margin-right: 6px; white-space: nowrap; }
+.auto-switch { align-items: center; gap: 10px; }
+.auto-switch .form-check-input { cursor: pointer; }
+.auto-switch .form-check-label { color: var(--ops-text); font-size: 12px; font-weight: 650; }
+.auto-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.auto-grid > div { padding: 12px 14px; border: 1px solid var(--ops-border); border-radius: 8px; background: var(--ops-bg); }
+.auto-label { color: var(--ops-muted); font-size: 9px; font-weight: 700; letter-spacing: .1em; }
+.auto-value { margin-top: 7px; color: var(--ops-text); font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+@media (max-width: 767.98px) { .auto-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .table-state { padding: 18px 2px; color: var(--ops-muted); font-size: 12px; }
 .empty-state { display: grid; justify-items: center; gap: 6px; padding: 30px 16px; color: var(--ops-muted); text-align: center; }
 .empty-state > i { margin-bottom: 2px; color: var(--ops-accent); font-size: 24px; }

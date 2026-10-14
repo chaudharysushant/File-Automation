@@ -1,7 +1,9 @@
 import os
+import atexit
 import hashlib
 import re
 import secrets
+import signal
 import smtplib
 import ssl
 import sys
@@ -25,6 +27,14 @@ app = Flask(__name__)
 PASSWORD_RESET_TTL = timedelta(minutes=30)
 MIN_PASSWORD_LENGTH = 6
 MAX_PASSWORD_LENGTH = 128
+
+# Automatic transfer settings.
+SETTINGS_TABLE = "file_automation_setting"
+AUTO_MODE_SETTING_KEY = "auto_mode_enabled"
+AUTO_MODE_LAST_RUN_KEY = "auto_mode_last_run"
+DEFAULT_AUTO_INTERVAL_MINUTES = 60
+# Application-wide advisory lock id so only one instance runs a scheduled check.
+SCHEDULER_LOCK_KEY = 76410231
 
 # Used to keep the login timing similar whether or not the username exists.
 _DUMMY_PASSWORD_HASH = generate_password_hash("dashboard-placeholder-password")
@@ -75,7 +85,16 @@ _state = {
     "last_started": None,
     "last_finished": None,
     "last_error": None,
+    "auto_mode": False,
+    "last_check": None,
+    "next_check": None,
+    "last_result": None,
 }
+
+_scheduler_thread = None
+_scheduler_lock = threading.Lock()
+_scheduler_stop = threading.Event()
+_scheduler_wake = threading.Event()
 
 
 def schema():
@@ -90,22 +109,26 @@ def valid_email(email):
     return len(email) <= 254 and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) is not None
 
 
+def resolve_stored_path(value):
+    return str(main.resolve_route_path(value)) if value else None
+
+
 def get_routes():
     conn = psycopg2.connect(**main.get_db_config())
     try:
         with conn.cursor() as cursor:
             cursor.execute(
                 sql.SQL("""
-                    SELECT client_id, source, destination, filename_regex, enabled
+                    SELECT client_id, source, destination, filename_regex, enabled, carrier
                     FROM {}.file_route
                     ORDER BY client_id, source, destination
                 """).format(sql.Identifier(schema()))
             )
             return [
                 {"client_id": row[0],
-                 "source": str(main.resolve_route_path(row[1])),
-                 "destination": str(main.resolve_route_path(row[2])),
-                 "filename_regex": row[3], "enabled": row[4]}
+                 "source": resolve_stored_path(row[1]),
+                 "destination": resolve_stored_path(row[2]),
+                 "filename_regex": row[3], "enabled": row[4], "carrier": row[5]}
                 for row in cursor.fetchall()
             ]
     finally:
@@ -387,24 +410,276 @@ class WorkerLogStream:
             _next_log_id += 1
 
 
-def run_cycle():
+# ---------------------------------------------------------------------------
+# Automatic mode storage and scheduling
+# ---------------------------------------------------------------------------
+
+def auto_interval_minutes():
+    try:
+        minutes = int(os.getenv("AUTO_TRANSFER_INTERVAL_MINUTES", str(DEFAULT_AUTO_INTERVAL_MINUTES)))
+    except (TypeError, ValueError):
+        minutes = DEFAULT_AUTO_INTERVAL_MINUTES
+    return max(1, minutes)
+
+
+def parse_timestamp(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def compute_next_check(last_run, now, interval):
+    if last_run is None:
+        return now + interval
+    candidate = last_run + interval
+    return candidate if candidate > now else now
+
+
+def ensure_settings_table():
+    conn = psycopg2.connect(**main.get_db_config())
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("""
+                        CREATE TABLE IF NOT EXISTS {}.{} (
+                            setting_key TEXT PRIMARY KEY,
+                            setting_value TEXT,
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """).format(sql.Identifier(schema()), sql.Identifier(SETTINGS_TABLE))
+                )
+    finally:
+        conn.close()
+
+
+def get_setting(key, default=None):
+    conn = psycopg2.connect(**main.get_db_config())
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                sql.SQL("SELECT setting_value FROM {}.{} WHERE setting_key = %s").format(
+                    sql.Identifier(schema()), sql.Identifier(SETTINGS_TABLE)),
+                (key,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else default
+    finally:
+        conn.close()
+
+
+def set_setting(key, value):
+    conn = psycopg2.connect(**main.get_db_config())
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    sql.SQL("""
+                        INSERT INTO {}.{} (setting_key, setting_value, updated_at)
+                        VALUES (%s, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT (setting_key) DO UPDATE
+                        SET setting_value = EXCLUDED.setting_value,
+                            updated_at = CURRENT_TIMESTAMP
+                    """).format(sql.Identifier(schema()), sql.Identifier(SETTINGS_TABLE)),
+                    (key, value),
+                )
+    finally:
+        conn.close()
+
+
+def auto_mode_enabled():
+    with _state_lock:
+        return bool(_state.get("auto_mode"))
+
+
+def load_auto_mode():
+    try:
+        stored = get_setting(AUTO_MODE_SETTING_KEY, "false")
+        enabled = str(stored).strip().lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        app.logger.warning("Automatic mode setting could not be read; defaulting to disabled")
+        enabled = False
+    with _state_lock:
+        _state["auto_mode"] = enabled
+    return enabled
+
+
+def _update_scheduler_state(**fields):
+    with _state_lock:
+        _state.update(fields)
+
+
+def _try_advisory_lock(conn):
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT pg_try_advisory_lock(%s)", (SCHEDULER_LOCK_KEY,))
+        return bool(cursor.fetchone()[0])
+
+
+def _release_advisory_lock(conn):
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_unlock(%s)", (SCHEDULER_LOCK_KEY,))
+
+
+def _run_scheduled_transfer():
+    now = datetime.now(timezone.utc)
+    lock_conn = None
+    acquired = False
+    try:
+        lock_conn = psycopg2.connect(**main.get_db_config())
+        lock_conn.autocommit = True
+        acquired = _try_advisory_lock(lock_conn)
+
+        if not acquired:
+            record_log("Automatic check skipped: another instance is handling it", "warning")
+            _update_scheduler_state(
+                last_check=now.isoformat(timespec="seconds"),
+                last_result="skipped (another instance)",
+            )
+            return "skipped"
+
+        with _state_lock:
+            busy = _state["running"] or _state["run_pending"]
+        if busy:
+            record_log("Automatic check skipped: a transfer is already running", "warning")
+            _update_scheduler_state(
+                last_check=now.isoformat(timespec="seconds"),
+                last_result="skipped (busy)",
+            )
+            return "skipped"
+
+        ran = run_cycle()
+        with _state_lock:
+            had_error = _state["last_error"] is not None
+        if not ran:
+            result = "skipped (busy)"
+            level = "warning"
+        elif had_error:
+            result = "error"
+            level = "error"
+        else:
+            result = "success"
+            level = "success"
+        record_log(f"Automatic check finished: {result}", level)
+        _update_scheduler_state(
+            last_check=now.isoformat(timespec="seconds"),
+            last_result=result,
+        )
+        try:
+            set_setting(AUTO_MODE_LAST_RUN_KEY, now.isoformat(timespec="seconds"))
+        except Exception:
+            app.logger.warning("Automatic mode last run could not be persisted")
+        return "success" if result == "success" else result
+    except Exception as error:
+        record_log(f"Automatic check failed: {error}", "error")
+        _update_scheduler_state(
+            last_check=now.isoformat(timespec="seconds"),
+            last_result="error",
+        )
+        return "error"
+    finally:
+        if acquired and lock_conn is not None:
+            try:
+                _release_advisory_lock(lock_conn)
+            except Exception:
+                app.logger.warning("Could not release the scheduler advisory lock")
+        if lock_conn is not None:
+            lock_conn.close()
+
+
+def _scheduler_loop():
+    while not _scheduler_stop.is_set():
+        try:
+            if not auto_mode_enabled():
+                _update_scheduler_state(next_check=None)
+                _scheduler_wake.wait()
+                _scheduler_wake.clear()
+                continue
+
+            now = datetime.now(timezone.utc)
+            interval = timedelta(minutes=auto_interval_minutes())
+            try:
+                last_run = parse_timestamp(get_setting(AUTO_MODE_LAST_RUN_KEY))
+            except Exception:
+                app.logger.warning("Automatic mode last run could not be read")
+                last_run = None
+            next_run = compute_next_check(last_run, now, interval)
+            _update_scheduler_state(next_check=next_run.isoformat(timespec="seconds"))
+
+            delay = max(0.0, (next_run - now).total_seconds())
+            woke = _scheduler_wake.wait(timeout=delay)
+            _scheduler_wake.clear()
+            if _scheduler_stop.is_set():
+                break
+            if woke:
+                continue
+            if not auto_mode_enabled():
+                continue
+            result = _run_scheduled_transfer()
+            if result != "success":
+                # Back off so a losing instance does not immediately retry and
+                # double-process, and so a database outage does not spin.
+                backoff = min(60.0, max(1.0, interval.total_seconds()))
+                _scheduler_wake.wait(timeout=backoff)
+                _scheduler_wake.clear()
+        except Exception:
+            app.logger.exception("Automatic transfer scheduler loop failed")
+            _scheduler_stop.wait(30)
+
+
+def start_scheduler():
+    global _scheduler_thread
+    with _scheduler_lock:
+        if _scheduler_thread is not None and _scheduler_thread.is_alive():
+            return
+        _scheduler_stop.clear()
+        _scheduler_wake.clear()
+        _scheduler_thread = threading.Thread(
+            target=_scheduler_loop, name="auto-transfer-scheduler", daemon=True)
+        _scheduler_thread.start()
+    record_log("Automatic transfer scheduler started")
+
+
+def stop_scheduler():
+    global _scheduler_thread
+    _scheduler_stop.set()
+    _scheduler_wake.set()
+    thread = _scheduler_thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=5)
+    _scheduler_thread = None
+
+
+def run_cycle(client_id=None):
     if not _run_lock.acquire(blocking=False):
-        return
+        with _state_lock:
+            _state["run_pending"] = False
+        return False
     with _state_lock:
         _state["running"] = True
         _state["run_pending"] = False
         _state["last_started"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _state["last_error"] = None
-    current_client_id = None
+    current_client_id = client_id
     try:
         log_stream = WorkerLogStream()
         with redirect_stdout(log_stream):
-            print("Checking database for active client_ids...")
-            for client_id in main.get_client_ids():
-                current_client_id = client_id
-                log_stream.client_id = client_id
-                print(f"Processing client_id: {client_id}")
-                main.copy_files(client_id)
+            if client_id is None:
+                print("Checking database for active client_ids...")
+                client_ids = main.get_client_ids()
+            else:
+                print(f"Running transfer for client_id: {client_id}")
+                client_ids = [client_id]
+            for active_client in client_ids:
+                current_client_id = active_client
+                log_stream.client_id = active_client
+                print(f"Processing client_id: {active_client}")
+                main.copy_files(active_client)
             log_stream.flush()
     except Exception as error:
         with _state_lock:
@@ -415,6 +690,8 @@ def run_cycle():
             _state["running"] = False
             _state["last_finished"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _run_lock.release()
+    with _state_lock:
+        return _state["last_error"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +930,8 @@ def status():
     with _state_lock:
         result = dict(_state)
         result["log_count"] = len(_logs)
+    result["auto_mode"] = bool(result.get("auto_mode"))
+    result["auto_interval_minutes"] = auto_interval_minutes()
     return jsonify(result)
 
 
@@ -681,22 +960,80 @@ def log_list():
 
 @app.post("/api/run")
 def run_now():
+    payload = request.get_json(silent=True) or {}
+    raw_client_id = payload.get("client_id")
+    client_id = None
+    if raw_client_id is not None:
+        client_id = str(raw_client_id).strip()
+        if not client_id:
+            return jsonify({"error": "client_id must not be empty"}), 400
+        try:
+            if not main.client_is_enabled(client_id):
+                return jsonify({"error": "Unknown or disabled client"}), 404
+        except Exception:
+            app.logger.exception("Unable to validate the requested client")
+            return jsonify({"error": "Unable to validate the requested client"}), 503
+
     with _state_lock:
         if _state["running"] or _state["run_pending"]:
             return jsonify({"error": "A sync is already running or queued"}), 409
         _state["run_pending"] = True
     try:
-        threading.Thread(target=run_cycle, name="manual-file-sync", daemon=True).start()
+        threading.Thread(target=run_cycle, args=(client_id,),
+                         name="manual-file-sync", daemon=True).start()
     except RuntimeError as error:
         with _state_lock:
             _state["run_pending"] = False
         return jsonify({"error": str(error)}), 500
-    record_log("Manual sync started")
-    return jsonify({"message": "Manual sync started"}), 202
+    if client_id:
+        record_log(f"Manual sync started for client {client_id}", client_id=client_id)
+    else:
+        record_log("Manual sync started for all clients")
+    return jsonify({"message": "Manual sync started", "client_id": client_id}), 202
+
+
+@app.post("/api/auto-mode")
+def set_auto_mode():
+    payload = request.get_json(silent=True) or {}
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify({"error": "enabled must be a boolean"}), 400
+    try:
+        ensure_settings_table()
+        set_setting(AUTO_MODE_SETTING_KEY, "true" if enabled else "false")
+    except Exception:
+        app.logger.exception("Automatic mode setting could not be saved")
+        return jsonify({"error": "Unable to update automatic mode"}), 503
+    with _state_lock:
+        _state["auto_mode"] = enabled
+        if not enabled:
+            _state["next_check"] = None
+    _scheduler_wake.set()
+    record_log("Automatic mode enabled" if enabled else "Automatic mode disabled",
+               "info" if enabled else "warning")
+    return jsonify({"auto_mode": enabled, "interval_minutes": auto_interval_minutes()})
+
+
+def _handle_shutdown(signum, frame):
+    stop_scheduler()
+    raise SystemExit(0)
 
 
 if __name__ == "__main__":
     from waitress import serve
+
+    try:
+        ensure_settings_table()
+    except Exception:
+        app.logger.warning("Automatic mode storage is unavailable; it will be retried on demand")
+    load_auto_mode()
+    start_scheduler()
+    atexit.register(stop_scheduler)
+    for handled_signal in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(handled_signal, _handle_shutdown)
+        except (ValueError, OSError):
+            pass
 
     serve(
         app,

@@ -70,6 +70,27 @@ def get_client_ids():
     return client_ids
 
 
+def client_is_enabled(client_id):
+    conn = psycopg2.connect(**get_db_config())
+
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT 1
+        FROM {schema}.file_route
+        WHERE client_id = %s
+          AND enabled = TRUE
+        LIMIT 1
+    """.format(schema=os.getenv("PG_SCHEMA", "public")), (client_id,))
+
+    found = cursor.fetchone() is not None
+
+    cursor.close()
+    conn.close()
+
+    return found
+
+
 def get_route(client_id):
     conn = psycopg2.connect(**get_db_config())
 
