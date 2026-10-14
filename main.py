@@ -127,6 +127,42 @@ def describe_size_change(current_size, previous_size):
     return f"{change_percent:+.2f}% ({description})"
 
 
+def file_stability_seconds():
+    try:
+        return max(0, int(os.getenv("FILE_STABILITY_SECONDS", "30")))
+    except (TypeError, ValueError):
+        return 30
+
+
+def file_signature(path):
+    stat = path.stat()
+    return stat.st_size, stat.st_mtime_ns
+
+
+def wait_for_stable_file(path, required_seconds, poll_interval=2.0, timeout=300.0):
+    try:
+        if time.time() - path.stat().st_mtime >= required_seconds:
+            return True
+        previous = file_signature(path)
+    except OSError:
+        return False
+
+    stable_since = time.monotonic()
+    deadline = stable_since + timeout
+    while time.monotonic() < deadline:
+        time.sleep(poll_interval)
+        try:
+            current = file_signature(path)
+        except OSError:
+            return False
+        if current != previous:
+            previous = current
+            stable_since = time.monotonic()
+        elif time.monotonic() - stable_since >= required_seconds:
+            return True
+    return False
+
+
 def copy_files(client_id=None):
     if client_id is None:
         client_ids = get_client_ids()
@@ -171,6 +207,7 @@ def copy_files(client_id=None):
                     reverse=True,
                 )
                 copied_count = 0
+                stability_seconds = file_stability_seconds()
 
                 for index, file in enumerate(recent_files):
                     target = destination / file.name
@@ -181,6 +218,13 @@ def copy_files(client_id=None):
                             flush=True,
                         )
                         break
+
+                    if not wait_for_stable_file(file, stability_seconds):
+                        print(
+                            f"File still being written; will retry later: {file}",
+                            flush=True,
+                        )
+                        continue
 
                     try:
                         shutil.copy2(file, target)
@@ -227,15 +271,3 @@ def copy_files(client_id=None):
                     f"{current_client_id}: {e}",
                     flush=True,
                 )
-
-
-if __name__ == "__main__":
-    poll_interval = int(os.getenv("POLL_INTERVAL_SECONDS", "30"))
-    print(f"Starting file sync poller every {poll_interval} seconds")
-
-    while True:
-        print("Checking database for active client_ids...")
-        for client_id in get_client_ids():
-            print(f"Processing client_id: {client_id}")
-            copy_files(client_id)
-        time.sleep(poll_interval)

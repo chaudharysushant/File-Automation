@@ -78,11 +78,20 @@
     state.autoMode = Boolean(status.auto_mode)
     const toggle = $('#auto-mode-toggle')
     toggle.checked = state.autoMode
+    $('#automation').classList.toggle('is-enabled', state.autoMode)
     $('#auto-mode-label').textContent = state.autoMode ? 'Enabled' : 'Disabled'
     $('#auto-status').textContent = state.autoMode ? 'Enabled' : 'Disabled'
     $('#auto-last').textContent = status.last_check ? formatDate(status.last_check) : 'Never'
     $('#auto-next').textContent = state.autoMode ? formatDate(status.next_check) : 'Not scheduled'
-    $('#auto-result').textContent = status.last_result || '—'
+    const result = $('#auto-result')
+    result.textContent = status.last_result || '—'
+    const outcome = String(status.last_result || '').toLowerCase()
+    const outcomeClass = !status.last_result ? 'result-muted'
+      : /fail|error|denied/.test(outcome) ? 'result-error'
+      : /partial|skip|warn/.test(outcome) ? 'result-warning'
+      : /success|completed|ok|done/.test(outcome) ? 'result-success'
+      : 'result-muted'
+    result.className = `auto-value ${outcomeClass}`
     const badge = $('#mode-badge')
     badge.textContent = state.autoMode ? 'Automatic' : 'Manual'
     badge.className = `badge align-middle ${state.autoMode ? 'bg-blue-lt' : 'bg-secondary-lt'}`
@@ -107,9 +116,16 @@
   function setWorkerStatus(status) {
     const active = Boolean(status.running || status.run_pending)
     const failed = Boolean(status.last_error)
+    const scope = status.current_client ? `client ${status.current_client}` : 'all clients'
     $('#worker-value').textContent = failed ? 'Attention' : status.running ? 'Running' : status.run_pending ? 'Starting' : 'Ready'
-    $('#worker-caption').textContent = failed ? 'Last transfer reported an error' : status.run_pending ? 'Transfer is queued' : status.running ? 'Transfer in progress' : 'Ready for manual transfer'
-    $('#connection-label').textContent = failed ? 'Needs attention' : active ? 'Transfer active' : 'Service ready'
+    $('#worker-caption').textContent = failed ? 'Last transfer reported an error'
+      : status.run_pending ? `Transfer queued for ${scope}`
+      : status.running ? `Transferring ${scope}`
+      : 'Ready for manual transfer'
+    $('#connection-label').textContent = failed ? 'Needs attention'
+      : status.running ? `Transferring ${scope}`
+      : status.run_pending ? 'Transfer queued'
+      : 'Service ready'
     $('#connection-dot').className = `status-dot${failed ? ' status-error' : active ? ' status-warning' : ' status-dot-live'}`
     $('#run-button').disabled = active || !state.csrfToken
     $('#last-value').textContent = formatDate(status.last_finished)
@@ -330,10 +346,10 @@
     const muted = getComputedStyle(document.documentElement).getPropertyValue('--ops-muted').trim()
     const border = getComputedStyle(document.documentElement).getPropertyValue('--ops-border').trim()
     const datasets = [
-      ['info', 'Info', '#3978d5'],
-      ['success', 'Success', '#2a9b72'],
-      ['warning', 'Warning', '#d5952f'],
-      ['error', 'Error', '#d45454'],
+      ['info', 'Info', '#3B82F6'],
+      ['success', 'Success', '#0D9488'],
+      ['warning', 'Warning', '#D97706'],
+      ['error', 'Error', '#DC2626'],
     ].map(([key, label, color]) => ({
       label,
       data: counts[key],
@@ -352,8 +368,8 @@
         tooltip: { callbacks: { footer: (items) => `${items.reduce((sum, item) => sum + item.raw, 0)} total events` } },
       },
       scales: {
-        x: { stacked: true, grid: { display: false }, ticks: { color: muted, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
-        y: { stacked: true, beginAtZero: true, grid: { color: border }, ticks: { color: muted, precision: 0, stepSize: 1 } },
+        x: { stacked: true, grid: { display: false }, border: { display: false }, ticks: { color: muted, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+        y: { stacked: true, beginAtZero: true, grid: { color: border, drawBorder: false }, border: { display: false }, ticks: { color: muted, precision: 0, stepSize: 1 } },
       },
     }
 

@@ -28,7 +28,6 @@ PASSWORD_RESET_TTL = timedelta(minutes=30)
 MIN_PASSWORD_LENGTH = 6
 MAX_PASSWORD_LENGTH = 128
 
-# Automatic transfer settings.
 SETTINGS_TABLE = "file_automation_setting"
 AUTO_MODE_SETTING_KEY = "auto_mode_enabled"
 AUTO_MODE_LAST_RUN_KEY = "auto_mode_last_run"
@@ -85,6 +84,7 @@ _state = {
     "last_started": None,
     "last_finished": None,
     "last_error": None,
+    "current_client": None,
     "auto_mode": False,
     "last_check": None,
     "next_check": None,
@@ -135,10 +135,6 @@ def get_routes():
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Account storage
-# ---------------------------------------------------------------------------
-
 def get_account_by_username(username):
     conn = psycopg2.connect(**main.get_db_config())
     try:
@@ -150,23 +146,6 @@ def get_account_by_username(username):
                     WHERE LOWER(username) = LOWER(%s)
                 """).format(sql.Identifier(schema())),
                 (username,),
-            )
-            return cursor.fetchone()
-    finally:
-        conn.close()
-
-
-def get_account_by_email(email):
-    conn = psycopg2.connect(**main.get_db_config())
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                sql.SQL("""
-                    SELECT account_id, username, email, password_hash
-                    FROM {}.dashboard_account
-                    WHERE email IS NOT NULL AND LOWER(email) = %s
-                """).format(sql.Identifier(schema())),
-                (email,),
             )
             return cursor.fetchone()
     finally:
@@ -271,17 +250,9 @@ def update_password_from_reset(token_hash, password_hash):
         conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Password reset tokens
-# ---------------------------------------------------------------------------
-
 def token_digest(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-
-# ---------------------------------------------------------------------------
-# Email
-# ---------------------------------------------------------------------------
 
 def smtp_configured():
     return bool(os.getenv("DASHBOARD_SMTP_HOST") and os.getenv("DASHBOARD_SMTP_FROM"))
@@ -334,10 +305,6 @@ def send_password_reset_email(token, recipient):
         "If you did not request this, you can ignore this message.",
     )
 
-
-# ---------------------------------------------------------------------------
-# Request helpers
-# ---------------------------------------------------------------------------
 
 def get_csrf_token():
     return session.setdefault("csrf_token", secrets.token_urlsafe(32))
@@ -409,10 +376,6 @@ class WorkerLogStream:
                           "message": message, "client_id": self.client_id})
             _next_log_id += 1
 
-
-# ---------------------------------------------------------------------------
-# Automatic mode storage and scheduling
-# ---------------------------------------------------------------------------
 
 def auto_interval_minutes():
     try:
@@ -665,6 +628,7 @@ def run_cycle(client_id=None):
         _state["run_pending"] = False
         _state["last_started"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _state["last_error"] = None
+        _state["current_client"] = client_id
     current_client_id = client_id
     try:
         log_stream = WorkerLogStream()
@@ -678,6 +642,8 @@ def run_cycle(client_id=None):
             for active_client in client_ids:
                 current_client_id = active_client
                 log_stream.client_id = active_client
+                with _state_lock:
+                    _state["current_client"] = active_client
                 print(f"Processing client_id: {active_client}")
                 main.copy_files(active_client)
             log_stream.flush()
@@ -688,15 +654,12 @@ def run_cycle(client_id=None):
     finally:
         with _state_lock:
             _state["running"] = False
+            _state["current_client"] = None
             _state["last_finished"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _run_lock.release()
     with _state_lock:
         return _state["last_error"] is None
 
-
-# ---------------------------------------------------------------------------
-# Authentication routes
-# ---------------------------------------------------------------------------
 
 @app.before_request
 def protect_dashboard():
@@ -978,6 +941,7 @@ def run_now():
         if _state["running"] or _state["run_pending"]:
             return jsonify({"error": "A sync is already running or queued"}), 409
         _state["run_pending"] = True
+        _state["current_client"] = client_id
     try:
         threading.Thread(target=run_cycle, args=(client_id,),
                          name="manual-file-sync", daemon=True).start()

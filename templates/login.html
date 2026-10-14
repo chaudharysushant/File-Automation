@@ -4,32 +4,30 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>{% if register_mode %}Sign up{% elif verify_mode %}Verify email{% elif forgot_mode %}Forgot password{% elif reset_mode %}Choose password{% else %}Sign in{% endif %} | SFTP Operations</title>
+  <title>{% if register_mode %}Sign up{% elif forgot_mode %}Forgot password{% elif reset_mode %}Choose password{% else %}Sign in{% endif %} | SFTP Operations</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
-    :root { color-scheme:light; --ink:#1c2c43; --muted:#66758a; --line:#dfe7f1; --blue:#0866ff; --blue-dark:#0758db; --red:#b63b3b; --mono:"IBM Plex Mono","SFMono-Regular",Consolas,monospace; --sans:Manrope,"Avenir Next","Segoe UI",sans-serif; }
+    :root { color-scheme:light; --ink:#172554; --line:#E1E7F3; --brand:#4F46E5; --brand-dark:#4338CA; --red:#DC2626; --green:#0D9488; --mono:"IBM Plex Mono","SFMono-Regular",Consolas,monospace; --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; }
     * { box-sizing:border-box; }
-    body { min-height:100vh; margin:0; display:grid; place-items:center; padding:24px; color:var(--ink); font:14px/1.5 var(--sans); background-color:#f1f5fa; background-image:linear-gradient(#dce5f033 1px,transparent 1px),linear-gradient(90deg,#dce5f033 1px,transparent 1px); background-size:28px 28px; }
-    .panel { width:min(100%,390px); padding:30px; background:#fff; border:1px solid var(--line); border-radius:7px; box-shadow:0 14px 36px #1c2c4312; animation:arrive .3s ease-out both; }
-    .brand { display:flex; align-items:center; gap:10px; margin-bottom:32px; font-weight:750; }
-    .mark { width:34px; height:34px; display:grid; place-items:center; border-radius:6px; color:white; background:var(--blue); font:600 11px var(--mono); }
-    .eyebrow { color:var(--blue); font:600 10px var(--mono); text-transform:uppercase; }
-    h1 { margin:7px 0 22px; font-size:25px; line-height:1.2; }
-    p.hint { margin:-8px 0 18px; color:var(--muted); font-size:12px; }
-    label { display:block; margin:15px 0 6px; color:#40536c; font-size:12px; font-weight:650; }
-    input { width:100%; height:42px; padding:0 11px; border:1px solid #cfd9e6; border-radius:5px; background:#fff; color:var(--ink); font:14px var(--sans); }
-    input:focus { outline:3px solid #86b7ff66; border-color:#6aa0f8; }
-    button { width:100%; height:42px; margin-top:22px; border:0; border-radius:5px; color:#fff; background:var(--blue); font:650 13px var(--sans); cursor:pointer; }
-    button:hover { background:var(--blue-dark); }
-    button.secondary { margin-top:10px; color:var(--blue); background:#eef4ff; }
-    button.secondary:hover { background:#e2ecff; }
+    body { min-height:100vh; margin:0; display:grid; place-items:center; padding:24px; color:var(--ink); font:14px/1.5 var(--sans); -webkit-font-smoothing:antialiased; background-color:#F5F6FF; background-image:linear-gradient(#4f46e50a 1px,transparent 1px),linear-gradient(90deg,#4f46e50a 1px,transparent 1px); background-size:28px 28px; }
+    .panel { width:min(100%,400px); padding:32px; background:#fff; border:1px solid var(--line); border-radius:16px; box-shadow:0 1px 2px #1725540a,0 24px 60px -28px #4f46e529; animation:arrive .3s ease-out both; }
+    .brand { display:flex; align-items:center; gap:11px; margin-bottom:30px; font-weight:750; }
+    .mark { width:36px; height:36px; display:grid; place-items:center; border-radius:11px; color:white; background:linear-gradient(135deg,#4F46E5 0%,#6366F1 60%,#8B5CF6 100%); font:600 11px var(--mono); box-shadow:0 6px 16px -6px #4f46e58c; }
+    .eyebrow { color:var(--brand); font:700 10px var(--sans); letter-spacing:.13em; text-transform:uppercase; }
+    h1 { margin:7px 0 22px; font-size:25px; line-height:1.2; letter-spacing:-.01em; }
+    label { display:block; margin:15px 0 6px; color:var(--ink); font-size:12px; font-weight:650; }
+    input { width:100%; height:42px; padding:0 12px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--ink); font:14px var(--sans); transition:border-color .16s ease,box-shadow .16s ease; }
+    input:focus { outline:none; border-color:var(--brand); box-shadow:0 0 0 3px #4f46e52e; }
+    button { width:100%; height:44px; margin-top:22px; border:0; border-radius:8px; color:#fff; background:var(--brand); font:650 13px var(--sans); cursor:pointer; transition:background-color .16s ease,box-shadow .16s ease,transform .16s ease; }
+    button:hover { background:var(--brand-dark); box-shadow:0 10px 20px -10px #4f46e58c; }
+    button:active { transform:translateY(1px); }
+    button:focus-visible { outline:2px solid var(--brand); outline-offset:2px; }
     .error { margin-top:15px; color:var(--red); font-size:12px; }
-    .success { margin:0 0 16px; color:#18845b; font-size:12px; }
-    .form-link { display:inline-block; margin-top:16px; margin-right:14px; color:var(--blue); font-size:12px; text-decoration:none; }
+    .success { margin:0 0 16px; color:var(--green); font-size:12px; }
+    .form-link { display:inline-block; margin-top:16px; margin-right:14px; color:var(--brand); font-size:12px; text-decoration:none; font-weight:500; }
     .form-link:hover { text-decoration:underline; }
-    .code { letter-spacing:.5em; text-align:center; font:600 20px var(--mono); }
     @keyframes arrive { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
     @media(prefers-reduced-motion:reduce) { .panel { animation:none; } }
   </style>
@@ -38,28 +36,12 @@
   <main class="panel">
     <div class="brand"><span class="mark" aria-hidden="true">ST</span><span>SFTP Operations</span></div>
     <div class="eyebrow">Dashboard access</div>
-    <h1>{% if register_mode %}Create account{% elif verify_mode %}Verify your email{% elif forgot_mode %}Forgot password{% elif reset_mode %}Choose a new password{% else %}Sign in{% endif %}</h1>
+    <h1>{% if register_mode %}Create account{% elif forgot_mode %}Forgot password{% elif reset_mode %}Choose a new password{% else %}Sign in{% endif %}</h1>
 
     {% if registered %}<p class="success" role="status">Account created. Sign in to continue.</p>{% endif %}
     {% if reset %}<p class="success" role="status">Password updated. Sign in to continue.</p>{% endif %}
     {% if notice %}<p class="success" role="status">{{ notice }}</p>{% endif %}
 
-    {% if verify_mode %}
-    <p class="hint">Enter the 6-digit code we sent to <strong>{{ pending_email }}</strong>.</p>
-    <form method="post" action="/verify-email">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label for="code">Verification code</label>
-      <input id="code" class="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required autofocus>
-      <button type="submit">Verify email</button>
-      {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
-    </form>
-    <form method="post" action="/verify-email">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="action" value="resend">
-      <button type="submit" class="secondary">Resend code</button>
-    </form>
-    <a class="form-link" href="/register">Use a different email</a>
-    {% else %}
     <form method="post" action="{% if register_mode %}/register{% elif forgot_mode %}/forgot-password{% elif reset_mode %}/reset-password/{{ reset_token }}{% else %}/login{% endif %}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
@@ -87,12 +69,11 @@
       {% endif %}
       {% endif %}
 
-      <button type="submit">{% if register_mode %}Send verification code{% elif forgot_mode %}Send reset link{% elif reset_mode %}Update password{% else %}Sign in{% endif %}</button>
+      <button type="submit">{% if register_mode %}Create account{% elif forgot_mode %}Send reset link{% elif reset_mode %}Update password{% else %}Sign in{% endif %}</button>
       {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
     </form>
-    {% endif %}
 
-    {% if not register_mode and not forgot_mode and not reset_mode and not verify_mode %}
+    {% if not register_mode and not forgot_mode and not reset_mode %}
     <a class="form-link" href="/forgot-password">Forgot password?</a>
     <a class="form-link" href="/register">Create an account</a>
     {% endif %}

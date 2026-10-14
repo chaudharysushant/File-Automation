@@ -1,11 +1,13 @@
 import importlib
 import os
+import tempfile
 import threading
+import time
 import types
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
-
 
 class FakeCursor:
     def __init__(self, rows):
@@ -26,7 +28,6 @@ class FakeCursor:
     def __exit__(self, *args):
         return False
 
-
 class FakeConnection:
     def __init__(self, rows):
         self._rows = rows
@@ -36,7 +37,6 @@ class FakeConnection:
 
     def close(self):
         return None
-
 
 class ImmediateThread:
     def __init__(self, target=None, args=(), kwargs=None, **options):
@@ -49,7 +49,6 @@ class ImmediateThread:
 
     def is_alive(self):
         return False
-
 
 class AutomationTests(unittest.TestCase):
     @classmethod
@@ -73,8 +72,6 @@ class AutomationTests(unittest.TestCase):
             current_session["authenticated"] = True
             current_session["csrf_token"] = "test-csrf"
         return "test-csrf"
-
-    # --- pure helpers -----------------------------------------------------
 
     def test_compute_next_check_handles_first_run_stale_and_recent(self):
         now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -102,8 +99,6 @@ class AutomationTests(unittest.TestCase):
         self.assertIsNone(self.app.parse_timestamp("not-a-date"))
         self.assertIsNone(self.app.parse_timestamp(None))
 
-    # --- routes / carrier ------------------------------------------------
-
     def test_get_routes_includes_carrier_and_resolves_paths(self):
         rows = [("FCM", "zph_chs/x", "zph_internal/y", "re", True, "CHS")]
         with patch.object(self.app.psycopg2, "connect", return_value=FakeConnection(rows)), \
@@ -119,8 +114,6 @@ class AutomationTests(unittest.TestCase):
             self.assertIsNone(self.app.resolve_stored_path(None))
             self.assertIsNone(self.app.resolve_stored_path(""))
             self.assertEqual(self.app.resolve_stored_path("zph/x"), "/base/zph/x")
-
-    # --- run endpoint scoping -------------------------------------------
 
     def test_run_scopes_to_a_single_validated_client(self):
         self.authenticate()
@@ -174,8 +167,6 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertIsNone(calls["client_id"])
 
-    # --- run_cycle guard -------------------------------------------------
-
     def test_run_cycle_returns_false_when_lock_is_held(self):
         self.app._state["run_pending"] = True
         self.app._run_lock.acquire()
@@ -186,7 +177,21 @@ class AutomationTests(unittest.TestCase):
         self.assertFalse(result)
         self.assertFalse(self.app._state["run_pending"])
 
-    # --- automatic mode endpoint ----------------------------------------
+    def test_run_cycle_tracks_current_client_for_overall_and_single(self):
+        for requested, expected in ((None, ["ABC", "FCM"]), ("FCM", ["FCM"])):
+            seen = []
+
+            def fake_copy(client_id):
+                with self.app._state_lock:
+                    seen.append(self.app._state["current_client"])
+
+            with patch.object(self.app.main, "get_client_ids", return_value=["ABC", "FCM"]), \
+                 patch.object(self.app.main, "copy_files", side_effect=fake_copy):
+                result = self.app.run_cycle(requested)
+
+            self.assertTrue(result)
+            self.assertEqual(seen, expected)
+            self.assertIsNone(self.app._state["current_client"])
 
     def test_auto_mode_toggle_persists_and_updates_state(self):
         self.authenticate()
@@ -217,8 +222,6 @@ class AutomationTests(unittest.TestCase):
                 "/api/auto-mode", json={"enabled": True},
                 headers={"X-CSRF-Token": "test-csrf"})
         self.assertEqual(response.status_code, 503)
-
-    # --- scheduled run coordination -------------------------------------
 
     def test_scheduled_run_skips_when_advisory_lock_not_acquired(self):
         with patch.object(self.app.psycopg2, "connect", return_value=FakeConnection([(False,)])), \
@@ -252,6 +255,85 @@ class AutomationTests(unittest.TestCase):
         self.assertGreaterEqual(len(calls), 1)
         self.assertEqual(set(calls), {None})
         self.assertIsNone(self.app._scheduler_thread)
+
+
+class FileStabilityTests(unittest.TestCase):
+    def setUp(self):
+        import main
+        self.main = main
+
+    def test_recently_written_file_waits_until_stable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "upload.csv"
+            path.write_text("data")
+            started = time.monotonic()
+            stable = self.main.wait_for_stable_file(
+                path, required_seconds=1, poll_interval=0.1, timeout=10)
+            self.assertTrue(stable)
+            self.assertGreaterEqual(time.monotonic() - started, 0.9)
+
+    def test_previously_written_file_is_immediately_stable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "upload.csv"
+            path.write_text("data")
+            old = time.time() - 120
+            os.utime(path, (old, old))
+            self.assertTrue(self.main.wait_for_stable_file(
+                path, required_seconds=30, poll_interval=0.1, timeout=1))
+
+    def test_missing_file_is_not_stable(self):
+        self.assertFalse(self.main.wait_for_stable_file(
+            Path("/nonexistent/never-here"), required_seconds=0,
+            poll_interval=0.05, timeout=1))
+
+    def test_stability_seconds_reads_env_and_clamps(self):
+        with patch.dict(os.environ, {"FILE_STABILITY_SECONDS": "5"}):
+            self.assertEqual(self.main.file_stability_seconds(), 5)
+        with patch.dict(os.environ, {"FILE_STABILITY_SECONDS": "not-a-number"}):
+            self.assertEqual(self.main.file_stability_seconds(), 30)
+        with patch.dict(os.environ, {"FILE_STABILITY_SECONDS": "-4"}):
+            self.assertEqual(self.main.file_stability_seconds(), 0)
+
+    def test_file_that_keeps_growing_times_out(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "growing.csv"
+            path.write_text("start")
+            stop = threading.Event()
+
+            def keep_writing():
+                while not stop.is_set():
+                    with open(path, "a", encoding="utf-8") as handle:
+                        handle.write("more\n")
+                    time.sleep(0.05)
+
+            writer = threading.Thread(target=keep_writing, daemon=True)
+            writer.start()
+            try:
+                self.assertFalse(self.main.wait_for_stable_file(
+                    path, required_seconds=1, poll_interval=0.1, timeout=0.6))
+            finally:
+                stop.set()
+                writer.join()
+
+    def test_copy_files_copies_stable_and_wires_stability_check(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "src"
+            destination = Path(root) / "dst"
+            source.mkdir()
+            destination.mkdir()
+            complete = source / "report.csv"
+            complete.write_text("complete")
+            old = time.time() - 120
+            os.utime(complete, (old, old))
+
+            with patch.object(self.main, "get_route", return_value=[("src", "dst", r".*\.csv$")]), \
+                 patch.object(self.main, "resolve_route_path", side_effect=lambda value: Path(root) / value), \
+                 patch.dict(os.environ, {"FILE_STABILITY_SECONDS": "30"}):
+                self.main.copy_files("CLIENT")
+
+            copied = destination / "report.csv"
+            self.assertTrue(copied.exists())
+            self.assertEqual(copied.read_text(), "complete")
 
 
 if __name__ == "__main__":
