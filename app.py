@@ -19,6 +19,11 @@ import psycopg2
 from psycopg2 import sql
 from werkzeug.security import check_password_hash, generate_password_hash
 
+try:
+    import psutil
+except ImportError:  # pragma: no cover - psutil is an optional runtime dependency
+    psutil = None
+
 import main
 
 
@@ -128,6 +133,52 @@ def valid_email(email):
 
 def resolve_stored_path(value):
     return str(main.resolve_route_path(value)) if value else None
+
+
+def _storage_path():
+    base = os.getenv("FILE_ROUTE_BASE_PATH")
+    path = Path(base) if base else Path("/")
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return path
+
+
+def system_metrics():
+    if psutil is None:
+        return {"available": False, "reason": "psutil is not installed"}
+
+    storage_path = _storage_path()
+    load_avg = None
+    try:
+        load_avg = [round(value, 2) for value in os.getloadavg()]
+    except (AttributeError, OSError):
+        load_avg = None
+
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage(str(storage_path))
+    return {
+        "available": True,
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "cpu": {
+            "percent": round(psutil.cpu_percent(interval=0.1), 1),
+            "logical_count": psutil.cpu_count(logical=True),
+            "physical_count": psutil.cpu_count(logical=False),
+            "load_avg": load_avg,
+        },
+        "memory": {
+            "total": memory.total,
+            "used": memory.used,
+            "available": memory.available,
+            "percent": round(memory.percent, 1),
+        },
+        "disk": {
+            "path": str(storage_path),
+            "total": disk.total,
+            "used": disk.used,
+            "free": disk.free,
+            "percent": round(disk.percent, 1),
+        },
+    }
 
 
 def get_routes():
@@ -1039,6 +1090,15 @@ def status():
     result["auto_mode"] = bool(result.get("auto_mode"))
     result["auto_interval_minutes"] = auto_interval_minutes()
     return jsonify(result)
+
+
+@app.get("/api/system")
+def system_status():
+    try:
+        return jsonify(system_metrics())
+    except Exception as error:
+        app.logger.exception("Unable to read system metrics")
+        return jsonify({"available": False, "error": str(error)}), 503
 
 
 @app.get("/api/routes")

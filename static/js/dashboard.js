@@ -61,6 +61,63 @@
     return Number.isNaN(date.getTime()) ? 'Never' : date.toLocaleString()
   }
 
+  function formatBytes(value) {
+    const bytes = Number(value)
+    if (!Number.isFinite(bytes) || bytes < 0) return '—'
+    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+    let size = bytes
+    let unit = 0
+    while (size >= 1024 && unit < units.length - 1) {
+      size /= 1024
+      unit += 1
+    }
+    const digits = unit === 0 ? 0 : size >= 100 ? 0 : size >= 10 ? 1 : 2
+    return `${size.toFixed(digits)} ${units[unit]}`
+  }
+
+  function formatPercent(value) {
+    const number = Number(value)
+    return Number.isFinite(number) ? `${number.toFixed(1)}%` : '—'
+  }
+
+  function applyResource(key, percent, value, caption) {
+    const bar = $(`#${key}-bar`)
+    const valueNode = $(`#${key}-value`)
+    const captionNode = $(`#${key}-caption`)
+    if (valueNode) valueNode.textContent = value
+    if (captionNode) captionNode.textContent = caption
+    if (!bar) return
+    const bounded = Math.max(0, Math.min(100, Number(percent) || 0))
+    bar.style.width = `${bounded}%`
+    bar.classList.toggle('is-warning', bounded >= 75 && bounded < 90)
+    bar.classList.toggle('is-error', bounded >= 90)
+  }
+
+  function renderSystem(metrics) {
+    const card = $('#system')
+    if (!card) return
+    const available = Boolean(metrics && metrics.available)
+    card.classList.toggle('is-unavailable', !available)
+    if (!available) {
+      const reason = (metrics && (metrics.reason || metrics.error)) || 'Metrics unavailable'
+      applyResource('cpu', 0, '—', reason)
+      applyResource('memory', 0, '—', reason)
+      applyResource('disk', 0, '—', reason)
+      return
+    }
+    const { cpu = {}, memory = {}, disk = {} } = metrics
+    const cores = [cpu.logical_count ? `${cpu.logical_count} cores` : null,
+      Array.isArray(cpu.load_avg) ? `load ${cpu.load_avg.join(' / ')}` : null]
+      .filter(Boolean).join(' · ') || 'Live usage'
+    applyResource('cpu', cpu.percent, formatPercent(cpu.percent), cores)
+    applyResource('memory', memory.percent, formatPercent(memory.percent),
+      `${formatBytes(memory.used)} of ${formatBytes(memory.total)} used`)
+    applyResource('disk', disk.percent, formatPercent(disk.percent),
+      `${formatBytes(disk.free)} free of ${formatBytes(disk.total)}`)
+    const caption = $('#system-caption')
+    if (caption) caption.textContent = disk.path ? `Storage: ${disk.path}` : 'Live host metrics'
+  }
+
   function clientKey(clientId) {
     return clientId == null ? '' : String(clientId)
   }
@@ -439,6 +496,11 @@
     renderRoutes()
   }
 
+  async function refreshSystem() {
+    const metrics = await api('/api/system')
+    renderSystem(metrics)
+  }
+
   async function refreshLogs(fromBeginning = false) {
     const after = fromBeginning ? 0 : state.lastLogId
     const entries = await api(`/api/logs?after=${after}`)
@@ -452,7 +514,9 @@
 
   async function refreshDashboard() {
     clearError()
-    const results = await Promise.allSettled([refreshStatus(), refreshRoutes(), refreshLogs(true)])
+    const results = await Promise.allSettled([
+      refreshStatus(), refreshRoutes(), refreshLogs(true), refreshSystem(),
+    ])
     const failed = results.find((result) => result.status === 'rejected')
     if (failed) showError(safeError(failed.reason))
   }
@@ -619,7 +683,9 @@
   async function initialize() {
     try {
       state.csrfToken = $('#logout-csrf').value
-      const results = await Promise.allSettled([refreshStatus(), refreshRoutes(), refreshLogs(true)])
+      const results = await Promise.allSettled([
+        refreshStatus(), refreshRoutes(), refreshLogs(true), refreshSystem(),
+      ])
       const failed = results.find((result) => result.status === 'rejected')
       if (failed) showError(safeError(failed.reason))
     } catch (error) {
@@ -640,4 +706,5 @@
     if ($('#client-log-dialog').open) refreshClientLog()
   }, 3000)
   window.setInterval(() => refreshRoutes().catch((error) => showError(safeError(error))), 15000)
+  window.setInterval(() => refreshSystem().catch((error) => showError(safeError(error))), 5000)
 })()

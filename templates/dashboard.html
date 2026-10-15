@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta21/dist/css/tabler.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.34.1/dist/tabler-icons.min.css" rel="stylesheet">
-  <link href="{{ url_for('static', filename='css/dashboard.css', v='6') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/dashboard.css', v='8') }}" rel="stylesheet">
 </head>
 <body>
   <div class="page">
@@ -33,6 +33,27 @@
             <li class="nav-item"><a class="nav-link" href="#routes"><span class="nav-link-icon"><i class="ti ti-route"></i></span><span class="nav-link-title">Client routes</span></a></li>
             <li class="nav-item"><a class="nav-link" href="#activity"><span class="nav-link-icon"><i class="ti ti-activity"></i></span><span class="nav-link-title">Activity logs</span></a></li>
           </ul>
+          <div class="sidebar-metrics" id="system" aria-label="Server resources">
+            <div class="sidebar-metrics-head">
+              <span class="sidebar-metrics-title"><i class="ti ti-server-2" aria-hidden="true"></i> SERVER</span>
+              <span class="sidebar-metrics-path" id="system-caption">Host</span>
+            </div>
+            <div class="sidebar-metric" id="resource-cpu">
+              <div class="sidebar-metric-row"><span class="sidebar-metric-label">CPU</span><span class="sidebar-metric-value" id="cpu-value">—</span></div>
+              <div class="sidebar-metric-bar"><span id="cpu-bar"></span></div>
+              <div class="sidebar-metric-caption" id="cpu-caption">Waiting for data</div>
+            </div>
+            <div class="sidebar-metric" id="resource-memory">
+              <div class="sidebar-metric-row"><span class="sidebar-metric-label">Memory</span><span class="sidebar-metric-value" id="memory-value">—</span></div>
+              <div class="sidebar-metric-bar"><span id="memory-bar"></span></div>
+              <div class="sidebar-metric-caption" id="memory-caption">Waiting for data</div>
+            </div>
+            <div class="sidebar-metric" id="resource-disk">
+              <div class="sidebar-metric-row"><span class="sidebar-metric-label">Storage</span><span class="sidebar-metric-value" id="disk-value">—</span></div>
+              <div class="sidebar-metric-bar"><span id="disk-bar"></span></div>
+              <div class="sidebar-metric-caption" id="disk-caption">Waiting for data</div>
+            </div>
+          </div>
           <div class="sidebar-foot">
             <span class="sidebar-foot-mark"><i class="ti ti-shield-check"></i></span>
             <span><strong>Protected workspace</strong><small>Authenticated session</small></span>
@@ -206,6 +227,6 @@
   </dialog>
   <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.0.0-beta21/dist/js/tabler.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
-  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=6" defer></script>
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}?v=8" defer></script>
 </body>
 </html>
