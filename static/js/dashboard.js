@@ -233,7 +233,23 @@
       const carrierCell = document.createElement('td')
       const carriers = distinctCarriers(routes)
       if (carriers.length) {
-        for (const carrier of carriers) carrierCell.append(makeBadge(carrier, 'azure'))
+        const limit = 5
+        for (const carrier of carriers.slice(0, limit)) carrierCell.append(makeBadge(carrier, 'azure'))
+        if (carriers.length > limit) {
+          const overflow = carriers.slice(limit)
+          const more = document.createElement('button')
+          more.type = 'button'
+          more.className = 'badge bg-azure-lt carrier-more'
+          more.textContent = `+${overflow.length} more`
+          const hidden = document.createElement('span')
+          hidden.className = 'carrier-overflow d-none'
+          for (const carrier of overflow) hidden.append(makeBadge(carrier, 'azure'))
+          more.addEventListener('click', () => {
+            const isHidden = hidden.classList.toggle('d-none')
+            more.textContent = isHidden ? `+${overflow.length} more` : 'Show less'
+          })
+          carrierCell.append(more, hidden)
+        }
       } else {
         const none = document.createElement('span')
         none.className = 'text-secondary'

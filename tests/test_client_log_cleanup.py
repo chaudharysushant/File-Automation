@@ -137,7 +137,7 @@ class ClientLogCleanupTests(unittest.TestCase):
             old = time.time() - 120
             os.utime(complete, (old, old))
 
-            with patch.object(main, "get_route", return_value=[("src", "dst", r".*\.csv$")]), \
+            with patch.object(main, "get_route", return_value=[("src", "dst", r".*\.csv$", False, False)]), \
                  patch.object(main, "resolve_route_path", side_effect=lambda value: Path(root) / value), \
                  patch.dict(os.environ, {"FILE_STABILITY_SECONDS": "30"}):
                 main.copy_files("CLIENT")

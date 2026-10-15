@@ -1,7 +1,9 @@
 import os
 import re
 import shutil
+import tarfile
 import time
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -97,7 +99,7 @@ def get_route(client_id):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT source, destination, filename_regex
+        SELECT source, destination, filename_regex, create_folder, zip
         FROM {schema}.file_route
         WHERE client_id = %s
           AND enabled = TRUE
@@ -163,6 +165,125 @@ def wait_for_stable_file(path, required_seconds, poll_interval=2.0, timeout=300.
     return False
 
 
+ZIP_EXTENSIONS = {".zip"}
+TAR_EXTENSIONS = (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz", ".tbz2")
+FOLDER_DATE_FORMAT = "%Y-%m-%d"
+
+# Date patterns found in source filenames, tried in order. Each entry extracts a
+# year/month/day which is normalised to FOLDER_DATE_FORMAT.
+_FILENAME_DATE_PATTERNS = (
+    re.compile(r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})"),
+    re.compile(r"(?P<year>\d{4})_(?P<month>\d{2})_(?P<day>\d{2})"),
+    re.compile(r"(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})"),
+    re.compile(r"(?P<month>\d{2})(?P<day>\d{2})(?P<year>\d{4})"),
+)
+
+
+def is_zip_file(filename):
+    return Path(filename).suffix.lower() in ZIP_EXTENSIONS
+
+
+def is_tar_file(filename):
+    return Path(filename).name.lower().endswith(TAR_EXTENSIONS)
+
+
+def is_archive_file(filename):
+    return is_zip_file(filename) or is_tar_file(filename)
+
+
+def current_date_folder():
+    return datetime.now().strftime(FOLDER_DATE_FORMAT)
+
+
+def folder_name_from_filename(filename, fallback=None):
+    """Return a YYYY-MM-DD folder name parsed from filename, else the fallback."""
+    for pattern in _FILENAME_DATE_PATTERNS:
+        for match in pattern.finditer(filename):
+            parts = match.groupdict()
+            try:
+                stamp = datetime(int(parts["year"]), int(parts["month"]), int(parts["day"]))
+            except ValueError:
+                continue
+            return stamp.strftime(FOLDER_DATE_FORMAT)
+    return fallback if fallback is not None else current_date_folder()
+
+
+def regex_is_empty(filename_regex):
+    return filename_regex is None or not str(filename_regex).strip()
+
+
+def matches_filename_regex(filename, filename_regex):
+    """Return True when filename matches the route regex; empty matches all."""
+    if regex_is_empty(filename_regex):
+        return True
+    try:
+        return re.match(filename_regex, filename) is not None
+    except re.error:
+        return False
+
+
+def extract_zip_archive(archive_path, target_dir):
+    """Extract a ZIP into target_dir, rejecting members that escape it."""
+    target_root = Path(target_dir).resolve()
+    with zipfile.ZipFile(archive_path) as archive:
+        for member in archive.infolist():
+            member_path = (target_root / member.filename).resolve()
+            if target_root != member_path and target_root not in member_path.parents:
+                raise ValueError(f"Archive member escapes destination: {member.filename}")
+        archive.extractall(target_root)
+
+
+def extract_tar_archive(archive_path, target_dir):
+    """Extract a tar archive into target_dir, rejecting members that escape it."""
+    target_root = Path(target_dir).resolve()
+    with tarfile.open(archive_path) as archive:
+        for member in archive.getmembers():
+            member_path = (target_root / member.name).resolve()
+            if target_root != member_path and target_root not in member_path.parents:
+                raise ValueError(f"Archive member escapes destination: {member.name}")
+        archive.extractall(target_root)
+
+
+def extract_archive(archive_path, target_dir):
+    if is_tar_file(archive_path):
+        extract_tar_archive(archive_path, target_dir)
+    else:
+        extract_zip_archive(archive_path, target_dir)
+
+
+def copy_file_into_folder(file, destination, is_archive, folders_created_this_run, stability_seconds):
+    """Copy a file into a date-named folder, extracting archives when requested.
+
+    Returns 1 when copied and 0 when skipped or failed. A folder that already
+    existed before this run is skipped; folders created earlier in this run
+    stay writable so a batch lands together.
+    """
+    folder_name = folder_name_from_filename(file.name) if is_archive else current_date_folder()
+    target_folder = destination / folder_name
+
+    if target_folder.exists() and target_folder not in folders_created_this_run:
+        print(f"Folder already exists; skipping download: {target_folder}", flush=True)
+        return 0
+
+    if not wait_for_stable_file(file, stability_seconds):
+        print(f"File still being written; will retry later: {file}", flush=True)
+        return 0
+
+    target = target_folder / file.name
+    try:
+        target_folder.mkdir(parents=True, exist_ok=True)
+        folders_created_this_run.add(target_folder)
+        shutil.copy2(file, target)
+        print(f"COPIED: {file} -> {target}", flush=True)
+        if is_archive:
+            extract_archive(target, target_folder)
+            print(f"EXTRACTED: {target} -> {target_folder}", flush=True)
+        return 1
+    except (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError) as error:
+        print(f"ERROR processing {file} -> {target_folder}: {error}", flush=True)
+        return 0
+
+
 def copy_files(client_id=None):
     if client_id is None:
         client_ids = get_client_ids()
@@ -171,8 +292,10 @@ def copy_files(client_id=None):
 
     for current_client_id in client_ids:
         routes = get_route(current_client_id)
+        # Folders created in this run stay writable; pre-existing ones are skipped.
+        folders_created_this_run = set()
 
-        for source_path, destination_path, filename_regex in routes:
+        for source_path, destination_path, filename_regex, create_folder, unzip_files in routes:
             source = resolve_route_path(source_path)
             destination = resolve_route_path(destination_path)
 
@@ -194,14 +317,16 @@ def copy_files(client_id=None):
                     )
                     continue
 
+                # Empty regex syncs every file and ignores the recent-files window.
+                skip_cutoff = regex_is_empty(filename_regex)
                 cutoff = datetime.now().timestamp() - timedelta(days=10).total_seconds()
                 recent_files = sorted(
                     (
                         file
                         for file in source.iterdir()
                         if file.is_file()
-                        and re.match(filename_regex, file.name)
-                        and file.stat().st_mtime >= cutoff
+                        and matches_filename_regex(file.name, filename_regex)
+                        and (skip_cutoff or file.stat().st_mtime >= cutoff)
                     ),
                     key=lambda file: file.stat().st_mtime,
                     reverse=True,
@@ -210,9 +335,27 @@ def copy_files(client_id=None):
                 stability_seconds = file_stability_seconds()
 
                 for index, file in enumerate(recent_files):
+                    is_archive = bool(unzip_files) and is_archive_file(file.name)
+
+                    if is_archive or bool(create_folder):
+                        copied_count += copy_file_into_folder(
+                            file,
+                            destination,
+                            is_archive,
+                            folders_created_this_run,
+                            stability_seconds,
+                        )
+                        continue
+
                     target = destination / file.name
 
                     if target.exists():
+                        if skip_cutoff:
+                            print(
+                                f"Already in destination; skipping: {target}",
+                                flush=True,
+                            )
+                            continue
                         print(
                             f"Already in destination; stopping before older files: {target}",
                             flush=True,
@@ -255,10 +398,16 @@ def copy_files(client_id=None):
                         )
 
                 if not recent_files:
-                    print(
-                        f"No matching files from the last 10 days in {source}",
-                        flush=True,
-                    )
+                    if skip_cutoff:
+                        print(
+                            f"No files found in {source}",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            f"No matching files from the last 10 days in {source}",
+                            flush=True,
+                        )
                 elif copied_count == 0:
                     print(
                         f"No new files to copy from {source}",

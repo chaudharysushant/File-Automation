@@ -187,7 +187,8 @@ def get_routes():
         with conn.cursor() as cursor:
             cursor.execute(
                 sql.SQL("""
-                    SELECT client_id, source, destination, filename_regex, enabled, carrier
+                    SELECT client_id, source, destination, filename_regex, enabled,
+                           carrier, create_folder, zip
                     FROM {}.file_route
                     ORDER BY client_id, source, destination
                 """).format(sql.Identifier(schema()))
@@ -196,7 +197,8 @@ def get_routes():
                 {"client_id": row[0],
                  "source": resolve_stored_path(row[1]),
                  "destination": resolve_stored_path(row[2]),
-                 "filename_regex": row[3], "enabled": row[4], "carrier": row[5]}
+                 "filename_regex": row[3], "enabled": row[4], "carrier": row[5],
+                 "create_folder": row[6], "zip": row[7]}
                 for row in cursor.fetchall()
             ]
     finally:

@@ -100,7 +100,7 @@ class AutomationTests(unittest.TestCase):
         self.assertIsNone(self.app.parse_timestamp(None))
 
     def test_get_routes_includes_carrier_and_resolves_paths(self):
-        rows = [("FCM", "zph_chs/x", "zph_internal/y", "re", True, "CHS")]
+        rows = [("FCM", "zph_chs/x", "zph_internal/y", "re", True, "CHS", True, False)]
         with patch.object(self.app.psycopg2, "connect", return_value=FakeConnection(rows)), \
              patch.object(self.app.main, "get_db_config", return_value={}), \
              patch.object(self.app.main, "resolve_route_path", side_effect=lambda value: "/base/" + value):
@@ -108,6 +108,8 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual(routes[0]["carrier"], "CHS")
         self.assertEqual(routes[0]["source"], "/base/zph_chs/x")
         self.assertEqual(routes[0]["destination"], "/base/zph_internal/y")
+        self.assertTrue(routes[0]["create_folder"])
+        self.assertFalse(routes[0]["zip"])
 
     def test_resolve_stored_path_handles_missing_values(self):
         with patch.object(self.app.main, "resolve_route_path", side_effect=lambda value: "/base/" + value):
@@ -326,7 +328,7 @@ class FileStabilityTests(unittest.TestCase):
             old = time.time() - 120
             os.utime(complete, (old, old))
 
-            with patch.object(self.main, "get_route", return_value=[("src", "dst", r".*\.csv$")]), \
+            with patch.object(self.main, "get_route", return_value=[("src", "dst", r".*\.csv$", False, False)]), \
                  patch.object(self.main, "resolve_route_path", side_effect=lambda value: Path(root) / value), \
                  patch.dict(os.environ, {"FILE_STABILITY_SECONDS": "30"}):
                 self.main.copy_files("CLIENT")

@@ -192,6 +192,8 @@ html[data-bs-theme="dark"] .auto-toggle:checked { background: linear-gradient(13
 .route-table tbody tr:hover td { background: color-mix(in srgb, var(--ops-accent-soft), transparent 55%); }
 .client-name { display: block; color: var(--ops-text); font-size: 12.5px; font-weight: 650; }
 .client-route-count { color: var(--ops-muted); font-size: 10px; }
+.carrier-more { margin-left: 4px; cursor: pointer; }
+.carrier-overflow { display: inline-flex; gap: 4px; margin-left: 4px; vertical-align: middle; }
 .route-details { margin-top: 6px; }
 .route-details summary { width: fit-content; color: var(--ops-accent); cursor: pointer; font-size: 10px; font-weight: 600; list-style: none; }
 .route-details summary::-webkit-details-marker { display: none; }
