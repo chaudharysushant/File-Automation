@@ -32,8 +32,14 @@ SETTINGS_TABLE = "file_automation_setting"
 AUTO_MODE_SETTING_KEY = "auto_mode_enabled"
 AUTO_MODE_LAST_RUN_KEY = "auto_mode_last_run"
 DEFAULT_AUTO_INTERVAL_MINUTES = 60
+# Individual client copy logs are cleared automatically on this cadence.
+CLIENT_LOG_CLEANUP_LAST_RUN_KEY = "client_log_cleanup_last_run"
+DEFAULT_CLIENT_LOG_CLEANUP_DAYS = 7
+CLIENT_LOG_MAX_ENTRIES = 500
 # Application-wide advisory lock id so only one instance runs a scheduled check.
 SCHEDULER_LOCK_KEY = 76410231
+# Matches the copy notification printed by main.copy_files.
+_COPIED_LINE = re.compile(r"^COPIED:\s*(?P<source>.+?)\s*->\s*(?P<target>.+?)\s*$")
 
 # Used to keep the login timing similar whether or not the username exists.
 _DUMMY_PASSWORD_HASH = generate_password_hash("dashboard-placeholder-password")
@@ -75,6 +81,10 @@ _state_lock = threading.Lock()
 _run_lock = threading.Lock()
 _logs = deque(maxlen=500)
 _next_log_id = 1
+# Per-client copy history: client_id -> deque of {"id", "client_id", "filename", "timestamp"}.
+_client_logs = {}
+_next_client_log_id = 1
+_client_logs_lock = threading.Lock()
 _console = sys.stdout
 _login_attempts = {}
 _login_attempts_lock = threading.Lock()
@@ -89,12 +99,19 @@ _state = {
     "last_check": None,
     "next_check": None,
     "last_result": None,
+    "client_log_last_cleanup": None,
+    "client_log_next_cleanup": None,
 }
 
 _scheduler_thread = None
 _scheduler_lock = threading.Lock()
 _scheduler_stop = threading.Event()
 _scheduler_wake = threading.Event()
+
+_client_log_cleanup_thread = None
+_client_log_cleanup_lock = threading.Lock()
+_client_log_cleanup_stop = threading.Event()
+_client_log_cleanup_wake = threading.Event()
 
 
 def schema():
@@ -348,6 +365,48 @@ def record_log(message, level="info", client_id=None):
     _console.flush()
 
 
+def parse_copied_filename(message):
+    match = _COPIED_LINE.match(str(message).strip())
+    if not match:
+        return None
+    return Path(match.group("source")).name
+
+
+def record_client_log(client_id, filename, timestamp=None):
+    global _next_client_log_id
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    key = "" if client_id is None else str(client_id)
+    with _client_logs_lock:
+        entries = _client_logs.setdefault(key, deque(maxlen=CLIENT_LOG_MAX_ENTRIES))
+        entries.append({
+            "id": _next_client_log_id,
+            "client_id": key,
+            "filename": filename,
+            "timestamp": timestamp,
+        })
+        _next_client_log_id += 1
+
+
+def get_client_logs(client_id):
+    key = "" if client_id is None else str(client_id)
+    with _client_logs_lock:
+        entries = _client_logs.get(key)
+        return list(entries) if entries else []
+
+
+def clear_client_logs(client_id=None):
+    with _client_logs_lock:
+        if client_id is None:
+            removed = sum(len(entries) for entries in _client_logs.values())
+            _client_logs.clear()
+        else:
+            key = str(client_id)
+            entries = _client_logs.pop(key, None)
+            removed = len(entries) if entries else 0
+    return removed
+
+
 class WorkerLogStream:
     def __init__(self):
         self.pending = ""
@@ -375,6 +434,10 @@ class WorkerLogStream:
             _logs.append({"id": _next_log_id, "timestamp": timestamp, "level": "info",
                           "message": message, "client_id": self.client_id})
             _next_log_id += 1
+        if self.client_id is not None:
+            filename = parse_copied_filename(message)
+            if filename:
+                record_client_log(self.client_id, filename, timestamp)
 
 
 def auto_interval_minutes():
@@ -383,6 +446,36 @@ def auto_interval_minutes():
     except (TypeError, ValueError):
         minutes = DEFAULT_AUTO_INTERVAL_MINUTES
     return max(1, minutes)
+
+
+def client_log_cleanup_interval():
+    try:
+        days = float(os.getenv("CLIENT_LOG_CLEANUP_DAYS", str(DEFAULT_CLIENT_LOG_CLEANUP_DAYS)))
+    except (TypeError, ValueError):
+        days = float(DEFAULT_CLIENT_LOG_CLEANUP_DAYS)
+    return timedelta(days=max(0.0, days))
+
+
+def compute_next_client_log_cleanup(last_run, now, interval):
+    if last_run is None:
+        return now + interval
+    candidate = last_run + interval
+    return candidate if candidate > now else now
+
+
+def run_client_log_cleanup():
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    removed = clear_client_logs()
+    try:
+        set_setting(CLIENT_LOG_CLEANUP_LAST_RUN_KEY, now)
+    except Exception:
+        app.logger.warning("Client log cleanup time could not be persisted")
+    _update_scheduler_state(
+        client_log_last_cleanup=now,
+        client_log_next_cleanup=None,
+    )
+    record_log(f"Client log cleanup removed {removed} entrie(s)")
+    return removed
 
 
 def parse_timestamp(value):
@@ -616,6 +709,56 @@ def stop_scheduler():
     if thread is not None and thread.is_alive():
         thread.join(timeout=5)
     _scheduler_thread = None
+
+
+def _client_log_cleanup_loop():
+    while not _client_log_cleanup_stop.is_set():
+        try:
+            now = datetime.now(timezone.utc)
+            interval = client_log_cleanup_interval()
+            try:
+                last_run = parse_timestamp(get_setting(CLIENT_LOG_CLEANUP_LAST_RUN_KEY))
+            except Exception:
+                app.logger.warning("Client log cleanup schedule could not be read")
+                last_run = None
+            next_run = compute_next_client_log_cleanup(last_run, now, interval)
+            _update_scheduler_state(
+                client_log_next_cleanup=next_run.isoformat(timespec="seconds"))
+
+            delay = max(0.0, (next_run - now).total_seconds())
+            woke = _client_log_cleanup_wake.wait(timeout=delay)
+            _client_log_cleanup_wake.clear()
+            if _client_log_cleanup_stop.is_set():
+                break
+            if woke:
+                continue
+            run_client_log_cleanup()
+        except Exception:
+            app.logger.exception("Client log cleanup scheduler loop failed")
+            _client_log_cleanup_stop.wait(30)
+
+
+def start_client_log_cleanup():
+    global _client_log_cleanup_thread
+    with _client_log_cleanup_lock:
+        if _client_log_cleanup_thread is not None and _client_log_cleanup_thread.is_alive():
+            return
+        _client_log_cleanup_stop.clear()
+        _client_log_cleanup_wake.clear()
+        _client_log_cleanup_thread = threading.Thread(
+            target=_client_log_cleanup_loop, name="client-log-cleanup", daemon=True)
+        _client_log_cleanup_thread.start()
+    record_log("Client log cleanup scheduler started")
+
+
+def stop_client_log_cleanup():
+    global _client_log_cleanup_thread
+    _client_log_cleanup_stop.set()
+    _client_log_cleanup_wake.set()
+    thread = _client_log_cleanup_thread
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=5)
+    _client_log_cleanup_thread = None
 
 
 def run_cycle(client_id=None):
@@ -921,6 +1064,27 @@ def log_list():
         ])
 
 
+@app.get("/api/client-logs")
+def client_log_list():
+    client_id = request.args.get("client_id")
+    if client_id is None:
+        return jsonify({"error": "client_id is required"}), 400
+    return jsonify(get_client_logs(client_id))
+
+
+@app.post("/api/client-logs/clear")
+def client_log_clear():
+    payload = request.get_json(silent=True)
+    if payload is None:
+        payload = {}
+    if "client_id" not in payload:
+        return jsonify({"error": "client_id is required"}), 400
+    client_id = payload.get("client_id")
+    removed = clear_client_logs("" if client_id is None else str(client_id))
+    record_log(f"Client logs cleared manually ({removed} entrie(s))")
+    return jsonify({"cleared": removed})
+
+
 @app.post("/api/run")
 def run_now():
     payload = request.get_json(silent=True) or {}
@@ -980,6 +1144,7 @@ def set_auto_mode():
 
 def _handle_shutdown(signum, frame):
     stop_scheduler()
+    stop_client_log_cleanup()
     raise SystemExit(0)
 
 
@@ -992,7 +1157,9 @@ if __name__ == "__main__":
         app.logger.warning("Automatic mode storage is unavailable; it will be retried on demand")
     load_auto_mode()
     start_scheduler()
+    start_client_log_cleanup()
     atexit.register(stop_scheduler)
+    atexit.register(stop_client_log_cleanup)
     for handled_signal in (signal.SIGTERM, signal.SIGINT):
         try:
             signal.signal(handled_signal, _handle_shutdown)

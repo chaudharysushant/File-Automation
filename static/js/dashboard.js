@@ -299,6 +299,41 @@
     }
   }
 
+  function renderClientLogRows(container, entries, query = '') {
+    container.replaceChildren()
+    const normalized = query.trim().toLowerCase()
+    const visible = entries.filter((entry) => {
+      const text = `${entry.filename ?? ''} ${entry.timestamp ?? ''}`.toLowerCase()
+      return text.includes(normalized)
+    })
+    if (!visible.length) {
+      const empty = document.createElement('div')
+      empty.className = 'empty-state log-empty'
+      const icon = document.createElement('i')
+      icon.className = 'ti ti-file-check'
+      const title = document.createElement('strong')
+      const detail = document.createElement('span')
+      title.textContent = entries.length ? 'No matching copied files' : 'No copied files yet'
+      detail.textContent = entries.length ? 'Adjust the search.' : 'Successfully copied files will appear here.'
+      empty.append(icon, title, detail)
+      container.append(empty)
+      return
+    }
+    for (const entry of visible) {
+      const row = document.createElement('div')
+      row.className = 'log-row client-log-row'
+      const name = document.createElement('span')
+      name.className = 'log-message client-log-filename'
+      name.textContent = entry.filename || '(unknown file)'
+      const time = document.createElement('time')
+      time.className = 'log-time client-log-time'
+      time.dateTime = entry.timestamp || ''
+      time.textContent = formatDate(entry.timestamp)
+      row.append(name, time)
+      container.append(row)
+    }
+  }
+
   function renderActivityChart() {
     const canvas = $('#activity-chart')
     const empty = $('#chart-empty')
@@ -428,7 +463,7 @@
     const title = state.activeClient.noClient ? 'Client without an ID' : `Client ${state.activeClient.id}`
     $('#client-log-title').textContent = `${title} logs`
     $('#client-log-search').value = ''
-    renderLogRows($('#client-log-list'), [])
+    renderClientLogRows($('#client-log-list'), [])
     $('#client-log-dialog').showModal()
     await refreshClientLog()
   }
@@ -437,13 +472,36 @@
     if (!state.activeClient) return
     try {
       const client = state.activeClient
-      const query = client.noClient ? '' : `?client_id=${encodeURIComponent(client.id)}`
-      const entries = await api(`/api/logs${query}`)
-      state.clientLogs = client.noClient ? entries.filter((entry) => entry.client_id == null) : entries
-      renderLogRows($('#client-log-list'), state.clientLogs, $('#client-log-search').value)
+      const clientId = client.noClient ? '' : client.id
+      const entries = await api(`/api/client-logs?client_id=${encodeURIComponent(clientId)}`)
+      state.clientLogs = Array.isArray(entries) ? entries : []
+      renderClientLogRows($('#client-log-list'), state.clientLogs, $('#client-log-search').value)
       $('#client-log-list').scrollTop = $('#client-log-list').scrollHeight
     } catch (error) {
-      renderLogRows($('#client-log-list'), [{ message: safeError(error), level: 'error' }])
+      renderClientLogRows($('#client-log-list'), [], $('#client-log-search').value)
+      showError(safeError(error))
+    }
+  }
+
+  async function clearClientLog() {
+    if (!state.activeClient) return
+    const clientId = state.activeClient.noClient ? '' : state.activeClient.id
+    const confirmed = window.confirm(
+      `Clear the copied-file log for ${state.activeClient.noClient ? 'this client' : `client ${state.activeClient.id}`}? ` +
+      'This only removes log entries and never deletes copied files.')
+    if (!confirmed) return
+    clearError()
+    try {
+      await api('/api/client-logs/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId }),
+      })
+      state.clientLogs = []
+      renderClientLogRows($('#client-log-list'), [], $('#client-log-search').value)
+      showNotice('Client logs cleared. Copied files were not affected.')
+    } catch (error) {
+      showError(safeError(error))
     }
   }
 
@@ -550,7 +608,8 @@
     if (event.target === $('#client-log-dialog')) $('#client-log-dialog').close()
   })
   $('#refresh-client-log').addEventListener('click', refreshClientLog)
-  $('#client-log-search').addEventListener('input', () => renderLogRows($('#client-log-list'), state.clientLogs, $('#client-log-search').value))
+  $('#clear-client-log').addEventListener('click', clearClientLog)
+  $('#client-log-search').addEventListener('input', () => renderClientLogRows($('#client-log-list'), state.clientLogs, $('#client-log-search').value))
   $('#theme-toggle').addEventListener('click', () => setTheme(document.documentElement.dataset.bsTheme === 'dark' ? 'light' : 'dark'))
   $('#sidebar-toggle').addEventListener('click', () => setSidebar(!document.body.classList.contains('sidebar-open')))
   $('#mobile-menu').addEventListener('click', () => setSidebar(true))

@@ -210,6 +210,9 @@ html[data-bs-theme="dark"] .auto-toggle:checked { background: linear-gradient(13
 .log-time { color: var(--ops-muted); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 10px; white-space: nowrap; }
 .log-message { min-width: 0; color: var(--ops-text); overflow-wrap: anywhere; white-space: pre-wrap; }
 .log-client { margin-right: 7px; color: var(--ops-accent); font-size: 9px; font-weight: 700; }
+.client-log-row { grid-template-columns: minmax(0, 1fr) auto; }
+.client-log-filename { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 600; }
+.client-log-time { text-align: right; }
 .log-empty { min-height: 130px; }
 .log-footer { display: flex; justify-content: space-between; gap: 12px; color: var(--ops-muted); font-size: 10px; }
 .log-footer > span:first-child { display: inline-flex; align-items: center; gap: 7px; }
