@@ -262,21 +262,71 @@ class RouteFolderTests(unittest.TestCase):
         self.assertTrue(self.main.regex_is_empty("  "))
         self.assertFalse(self.main.regex_is_empty(r".*\.csv$"))
 
-    def test_empty_regex_copies_all_files_ignoring_cutoff(self):
+    def test_latest_date_from_filenames_picks_newest(self):
+        files = [Path("a_20200101.zip"), Path("b_20231005.tgz"), Path("c.zip")]
+        self.assertEqual(self.main.latest_date_from_filenames(files), "2023-10-05")
+
+    def test_date_from_filename_returns_none_when_absent(self):
+        self.assertIsNone(self.main.date_from_filename("archive.zip"))
+        self.assertEqual(self.main.date_from_filename("x_20201015.zip"), "2020-10-15")
+
+    def test_empty_regex_copies_all_files_into_latest_date_folder(self):
         with tempfile.TemporaryDirectory() as root:
             source = Path(root) / "src"
             destination = Path(root) / "dst"
             source.mkdir()
             destination.mkdir()
-            self._write_aged_file(source, "old_report.csv", 20, b"old")
-            self._write_aged_file(source, "older_report.txt", 40, b"older")
+            self._write_aged_file(source, "report_20200115.csv", 20, b"old")
+            self._write_aged_file(source, "report_20201015.txt", 40, b"newer")
 
             self._run(root, [("src", "dst", "", False, False)])
 
-            self.assertTrue((destination / "old_report.csv").exists())
-            self.assertTrue((destination / "older_report.txt").exists())
+            folder = destination / "2020-10-15"
+            self.assertTrue((folder / "report_20200115.csv").exists())
+            self.assertTrue((folder / "report_20201015.txt").exists())
 
-    def test_none_regex_copies_all_files(self):
+    def test_empty_regex_ignores_cutoff_for_all_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "src"
+            destination = Path(root) / "dst"
+            source.mkdir()
+            destination.mkdir()
+            self._write_aged_file(source, "a_20200101.csv", 40, b"old")
+            self._write_aged_file(source, "b_20200102.csv", 90, b"older")
+
+            self._run(root, [("src", "dst", "   ", False, False)])
+
+            folder = destination / "2020-01-02"
+            self.assertTrue((folder / "a_20200101.csv").exists())
+            self.assertTrue((folder / "b_20200102.csv").exists())
+
+    def test_empty_regex_skips_when_latest_date_folder_exists(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "src"
+            destination = Path(root) / "dst"
+            source.mkdir()
+            destination.mkdir()
+            self._write_aged_file(source, "report_20201015.zip", 1, b"zip")
+            (destination / "2020-10-15").mkdir()
+
+            self._run(root, [("src", "dst", "", False, True)])
+
+            self.assertFalse((destination / "2020-10-15" / "report_20201015.zip").exists())
+
+    def test_empty_regex_extracts_archives_when_unzip_enabled(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "src"
+            destination = Path(root) / "dst"
+            source.mkdir()
+            destination.mkdir()
+            self._write_tar(source, "zph_ida_update.20261014.tgz", {"data.txt": "hello"})
+
+            self._run(root, [("src", "dst", "", False, True)])
+
+            folder = destination / "2026-10-14"
+            self.assertEqual((folder / "data.txt").read_text(), "hello")
+
+    def test_none_regex_without_dates_uses_current_date_folder(self):
         with tempfile.TemporaryDirectory() as root:
             source = Path(root) / "src"
             destination = Path(root) / "dst"
@@ -286,21 +336,8 @@ class RouteFolderTests(unittest.TestCase):
 
             self._run(root, [("src", "dst", None, False, False)])
 
-            self.assertTrue((destination / "one.dat").exists())
-
-    def test_empty_regex_does_not_stop_when_newest_already_present(self):
-        with tempfile.TemporaryDirectory() as root:
-            source = Path(root) / "src"
-            destination = Path(root) / "dst"
-            source.mkdir()
-            destination.mkdir()
-            self._write_aged_file(source, "new.log", 1, b"new")
-            self._write_aged_file(source, "old.log", 2, b"old")
-            (destination / "new.log").write_bytes(b"new")
-
-            self._run(root, [("src", "dst", "", False, False)])
-
-            self.assertTrue((destination / "old.log").exists())
+            folder = destination / self.main.current_date_folder()
+            self.assertTrue((folder / "one.dat").exists())
 
     def test_regex_still_applies_cutoff_for_configured_pattern(self):
         with tempfile.TemporaryDirectory() as root:

@@ -1,2 +1,51 @@
-[2026-10-15T13:39:48+00:00] Automatic transfer scheduler started
-[2026-10-15T13:39:48+00:00] Client log cleanup scheduler started
+[2026-10-15T13:51:19+00:00] Automatic transfer scheduler started
+[2026-10-15T13:51:19+00:00] Client log cleanup scheduler started
+Checking database for active client_ids...
+Processing client_id: ABC
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_abc/ftpdir/In')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/ABC')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_abc/ftpdir/In')
+Processing client_id: ASR
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_asr/ftpdir/in')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/ASR/Elig')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_asr/ftpdir/in')
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_asr/ftpdir/in')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/ASR/Med')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_asr/ftpdir/in')
+Processing client_id: CDSADMIN
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_cdsadmin/ftpdir/In')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/CDSADMIN')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_cdsadmin/ftpdir/In')
+Processing client_id: FCM
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_chs/ftpdir/In/Tx-Compliance')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/CHS/Elig')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_chs/ftpdir/In/Tx-Compliance')
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_chs/ftpdir/In/Tx-Compliance')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/CHS/Medical')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_chs/ftpdir/In/Tx-Compliance')
+Processing client_id: FCM_EZ
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_chs/ftpdir/In/EZ-Non compliance')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/FCM Ez/Elig')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_chs/ftpdir/In/EZ-Non compliance')
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_chs/ftpdir/In/EZ-Non compliance')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/FCM Ez/Med')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_chs/ftpdir/In/EZ-Non compliance')
+Processing client_id: HERITAGE
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/ebix_zph/ftpdir/Out/Heritage')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/Heritage/Ebix')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/ebix_zph/ftpdir/Out/Heritage')
+Processing client_id: PBS
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_proben/ftpdir/In')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/ProfBen (PBS)/Eligibility')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_proben/ftpdir/In')
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_proben/ftpdir/In')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/ProfBen (PBS)/Med')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_proben/ftpdir/In')
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_us_rx_care/ftpdir/In/PBS')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/ProfBen (PBS)/US Care Rx')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_us_rx_care/ftpdir/In/PBS')
+Processing client_id: SMHA
+Checking source: PosixPath('/home/ubuntu/file-automation/satish/zph_smha/ftpdir/In')
+Checking destination: PosixPath('/home/ubuntu/file-automation/satish/zph_internal/ftpdir/archive/client_data_staging/RegularFiles/SMHA/WLT')
+Source directory unavailable: PosixPath('/home/ubuntu/file-automation/satish/zph_smha/ftpdir/In')
+[2026-10-15T13:58:39+00:00] Automatic check finished: success

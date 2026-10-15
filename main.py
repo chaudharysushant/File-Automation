@@ -195,8 +195,8 @@ def current_date_folder():
     return datetime.now().strftime(FOLDER_DATE_FORMAT)
 
 
-def folder_name_from_filename(filename, fallback=None):
-    """Return a YYYY-MM-DD folder name parsed from filename, else the fallback."""
+def date_from_filename(filename):
+    """Return a YYYY-MM-DD date parsed from filename, or None."""
     for pattern in _FILENAME_DATE_PATTERNS:
         for match in pattern.finditer(filename):
             parts = match.groupdict()
@@ -205,7 +205,20 @@ def folder_name_from_filename(filename, fallback=None):
             except ValueError:
                 continue
             return stamp.strftime(FOLDER_DATE_FORMAT)
-    return fallback if fallback is not None else current_date_folder()
+    return None
+
+
+def folder_name_from_filename(filename, fallback=None):
+    """Return a YYYY-MM-DD folder name parsed from filename, else the fallback."""
+    return date_from_filename(filename) or (
+        fallback if fallback is not None else current_date_folder()
+    )
+
+
+def latest_date_from_filenames(files):
+    """Return the newest YYYY-MM-DD date found in the filenames, else today."""
+    dates = [date for date in (date_from_filename(file.name) for file in files) if date]
+    return max(dates) if dates else current_date_folder()
 
 
 def regex_is_empty(filename_regex):
@@ -284,6 +297,38 @@ def copy_file_into_folder(file, destination, is_archive, folders_created_this_ru
         return 0
 
 
+def copy_all_files_into_folder(files, destination, extract_archives, stability_seconds):
+    """Copy every file into one folder named after the newest date in the
+    filenames (falling back to today). Skips entirely when that folder already
+    exists in the destination. Returns the number of files copied.
+    """
+    if not files:
+        return 0
+
+    target_folder = destination / latest_date_from_filenames(files)
+    if target_folder.exists():
+        print(f"Folder already exists; skipping download: {target_folder}", flush=True)
+        return 0
+
+    target_folder.mkdir(parents=True, exist_ok=True)
+    copied_count = 0
+    for file in files:
+        if not wait_for_stable_file(file, stability_seconds):
+            print(f"File still being written; will retry later: {file}", flush=True)
+            continue
+        target = target_folder / file.name
+        try:
+            shutil.copy2(file, target)
+            print(f"COPIED: {file} -> {target}", flush=True)
+            if extract_archives and is_archive_file(file.name):
+                extract_archive(target, target_folder)
+                print(f"EXTRACTED: {target} -> {target_folder}", flush=True)
+            copied_count += 1
+        except (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError) as error:
+            print(f"ERROR processing {file} -> {target_folder}: {error}", flush=True)
+    return copied_count
+
+
 def copy_files(client_id=None):
     if client_id is None:
         client_ids = get_client_ids()
@@ -334,75 +379,74 @@ def copy_files(client_id=None):
                 copied_count = 0
                 stability_seconds = file_stability_seconds()
 
-                for index, file in enumerate(recent_files):
-                    is_archive = bool(unzip_files) and is_archive_file(file.name)
+                if skip_cutoff:
+                    copied_count = copy_all_files_into_folder(
+                        recent_files,
+                        destination,
+                        bool(unzip_files),
+                        stability_seconds,
+                    )
+                else:
+                    for index, file in enumerate(recent_files):
+                        is_archive = bool(unzip_files) and is_archive_file(file.name)
 
-                    if is_archive or bool(create_folder):
-                        copied_count += copy_file_into_folder(
-                            file,
-                            destination,
-                            is_archive,
-                            folders_created_this_run,
-                            stability_seconds,
-                        )
-                        continue
+                        if is_archive or bool(create_folder):
+                            copied_count += copy_file_into_folder(
+                                file,
+                                destination,
+                                is_archive,
+                                folders_created_this_run,
+                                stability_seconds,
+                            )
+                            continue
 
-                    target = destination / file.name
+                        target = destination / file.name
 
-                    if target.exists():
-                        if skip_cutoff:
+                        if target.exists():
                             print(
-                                f"Already in destination; skipping: {target}",
+                                f"Already in destination; stopping before older files: {target}",
+                                flush=True,
+                            )
+                            break
+
+                        if not wait_for_stable_file(file, stability_seconds):
+                            print(
+                                f"File still being written; will retry later: {file}",
                                 flush=True,
                             )
                             continue
-                        print(
-                            f"Already in destination; stopping before older files: {target}",
-                            flush=True,
-                        )
-                        break
 
-                    if not wait_for_stable_file(file, stability_seconds):
-                        print(
-                            f"File still being written; will retry later: {file}",
-                            flush=True,
-                        )
-                        continue
+                        try:
+                            shutil.copy2(file, target)
+                            print(f"COPIED: {file} -> {target}", flush=True)
+                            if index + 1 < len(recent_files):
+                                previous_file = recent_files[index + 1]
+                                change = describe_size_change(
+                                    file.stat().st_size,
+                                    previous_file.stat().st_size,
+                                )
+                                print(
+                                    f"SIZE CHANGE: {file.name} vs previous file "
+                                    f"{previous_file.name}: {change}",
+                                    flush=True,
+                                )
+                            else:
+                                print(
+                                    f"SIZE CHANGE: no older matching file available "
+                                    f"for {file.name}",
+                                    flush=True,
+                                )
+                            copied_count += 1
 
-                    try:
-                        shutil.copy2(file, target)
-                        print(f"COPIED: {file} -> {target}", flush=True)
-                        if index + 1 < len(recent_files):
-                            previous_file = recent_files[index + 1]
-                            change = describe_size_change(
-                                file.stat().st_size,
-                                previous_file.stat().st_size,
-                            )
+                        except OSError as e:
                             print(
-                                f"SIZE CHANGE: {file.name} vs previous file "
-                                f"{previous_file.name}: {change}",
+                                f"ERROR copying {file} -> {target}: {e}",
                                 flush=True,
                             )
-                        else:
-                            print(
-                                f"SIZE CHANGE: no older matching file available "
-                                f"for {file.name}",
-                                flush=True,
-                            )
-                        copied_count += 1
-
-                    except OSError as e:
-                        print(
-                            f"ERROR copying {file} -> {target}: {e}",
-                            flush=True,
-                        )
 
                 if not recent_files:
                     if skip_cutoff:
-                        print(
-                            f"No files found in {source}",
-                            flush=True,
-                        )
+                        print(f"No files found in {source}", flush=True)
                     else:
                         print(
                             f"No matching files from the last 10 days in {source}",
