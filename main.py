@@ -256,7 +256,7 @@ def copy_file_into_folder(file, destination, is_archive, folders_created_this_ru
 
     Returns 1 when copied and 0 when skipped or failed. A folder that already
     existed before this run is skipped; folders created earlier in this run
-    stay writable so a batch lands together.
+    stay writable so a batch lands together. The source file is never removed.
     """
     folder_name = folder_name_from_filename(file.name) if is_archive else current_date_folder()
     target_folder = destination / folder_name

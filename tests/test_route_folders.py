@@ -116,6 +116,32 @@ class RouteFolderTests(unittest.TestCase):
             self.assertTrue((folder / "zph_ida_update.10142026.tgz").exists())
             self.assertEqual((folder / "data.txt").read_text(), "hello")
 
+    def test_archive_source_is_kept(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "src"
+            destination = Path(root) / "dst"
+            source.mkdir()
+            destination.mkdir()
+            archive = self._write_zip(source, "Report_20240115.zip", {"data.txt": "hello"})
+
+            self._run(root, [("src", "dst", r".*\.zip$", False, True)])
+
+            self.assertTrue(archive.exists())
+            self.assertTrue((destination / "2024-01-15" / "Report_20240115.zip").exists())
+
+    def test_non_archive_create_folder_keeps_source(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "src"
+            destination = Path(root) / "dst"
+            source.mkdir()
+            destination.mkdir()
+            plain = self._write_file(source, "report.csv", b"complete")
+
+            self._run(root, [("src", "dst", r".*\.csv$", True, False)])
+
+            self.assertTrue(plain.exists())
+            self.assertTrue((destination / self.main.current_date_folder() / "report.csv").exists())
+
     def test_zip_is_extracted_into_dated_folder_and_kept(self):
         with tempfile.TemporaryDirectory() as root:
             source = Path(root) / "src"

@@ -1,4 +1,2 @@
-[2026-10-15T11:05:50+00:00] Automatic transfer scheduler started
-[2026-10-15T11:05:50+00:00] Client log cleanup scheduler started
-WARNING:waitress.queue:Task queue depth is 1
-WARNING:waitress.queue:Task queue depth is 1
+[2026-10-15T13:39:48+00:00] Automatic transfer scheduler started
+[2026-10-15T13:39:48+00:00] Client log cleanup scheduler started
