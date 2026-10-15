@@ -23,4 +23,5 @@ services:
     ports:
       - "0.0.0.0:${DASHBOARD_PORT:-8080}:8080"
     working_dir: /app
+    user: "${PUID:-1000}:${PGID:-1000}"
     command: python app.py
